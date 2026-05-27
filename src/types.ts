@@ -20,6 +20,7 @@ export type MemoryAction =
   | "delete"
   | "search"
   | "list";
+export type SearchScope = "all" | "global" | "project";
 
 export interface TimestampEntry {
   timestamp: string;

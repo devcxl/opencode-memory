@@ -3,6 +3,7 @@ import { tool } from "@opencode-ai/plugin";
 import { loadConfig } from "./config.js";
 import { MemoryManager } from "./MemoryManager.js";
 import { BootstrapManager } from "./BootstrapManager.js";
+import { detectProject } from "./projectDetector.js";
 import {
   MEMORY_AWARENESS_INSTRUCTIONS,
   BOOTSTRAP_INSTRUCTIONS,
@@ -29,6 +30,7 @@ export const MemoryPlugin: Plugin = async (ctx: PluginInput) => {
   const config = loadConfig();
   const memoryManager = new MemoryManager(config);
   const bootstrapManager = new BootstrapManager(memoryManager);
+  const projectId = detectProject();
 
   bootstrapManager.initialize();
 
@@ -40,7 +42,7 @@ export const MemoryPlugin: Plugin = async (ctx: PluginInput) => {
     } catch (err) {}
   })();
 
-  const buildContext = (): string => {
+  const buildContext = (pId?: string | null): string => {
     const sections: string[] = [];
     if (bootstrapManager.isBootstrapNeeded()) {
       const bootstrapContent = memoryManager.readFile(
@@ -52,7 +54,7 @@ export const MemoryPlugin: Plugin = async (ctx: PluginInput) => {
         );
       }
     } else {
-      const contextFiles = memoryManager.getContextFiles();
+      const contextFiles = memoryManager.getContextFiles(pId);
       for (const file of contextFiles) {
         sections.push(`## ${file.name}\n\n${file.content}`);
       }
@@ -121,7 +123,7 @@ export const MemoryPlugin: Plugin = async (ctx: PluginInput) => {
     },
 
     "experimental.chat.system.transform": async (_input, output) => {
-      const memoryContext = buildContext();
+      const memoryContext = buildContext(projectId);
       if (!memoryContext) return;
       const instructions = getMemoryInstructions();
       output.system.push(memoryContext + instructions);
@@ -204,6 +206,16 @@ export const MemoryPlugin: Plugin = async (ctx: PluginInput) => {
             .describe(
               "Filter by period: YYYY-MM (month) or YYYY (year). For list and search actions.",
             ),
+          scope: tool.schema
+            .enum(["all", "global", "project"])
+            .optional()
+            .describe("Search scope: all (default), global, or project only"),
+          project: tool.schema
+            .string()
+            .optional()
+            .describe(
+              "Target project ID for read/write. Auto-detected if omitted.",
+            ),
         },
         async execute(args) {
           memoryManager.ensureDirectories();
@@ -219,7 +231,7 @@ export const MemoryPlugin: Plugin = async (ctx: PluginInput) => {
             case "delete":
               return handleDelete(args, memoryManager);
             case "search":
-              return handleSearch(args, memoryManager);
+              return handleSearch(args, memoryManager, projectId);
             case "list":
               return handleList(args, memoryManager);
             default:
@@ -232,10 +244,10 @@ export const MemoryPlugin: Plugin = async (ctx: PluginInput) => {
 };
 
 function handleRead(
-  params: { target?: string; date?: string },
+  params: { target?: string; date?: string; project?: string },
   memoryManager: MemoryManager,
 ): string {
-  const { target, date } = params;
+  const { target, date, project } = params;
 
   if (!target) {
     return handleList({}, memoryManager);
@@ -245,6 +257,7 @@ function handleRead(
     const { filePath, displayName } = memoryManager.getPathForTarget(
       target,
       date,
+      project || undefined,
     );
     const content = memoryManager.readFile(filePath);
     if (!content) {
@@ -257,10 +270,16 @@ function handleRead(
 }
 
 async function handleWrite(
-  params: { target?: string; content?: string; mode?: string; date?: string },
+  params: {
+    target?: string;
+    content?: string;
+    mode?: string;
+    date?: string;
+    project?: string;
+  },
   memoryManager: MemoryManager,
 ): Promise<string> {
-  const { target, content, mode, date } = params;
+  const { target, content, mode, date, project } = params;
 
   if (!content) {
     return "Error: content is required for write action.";
@@ -273,10 +292,15 @@ async function handleWrite(
   validateTarget(target);
   validateContent(content);
 
+  if (project && target === "memory") {
+    memoryManager.ensureProjectDirs(project);
+  }
+
   try {
     const { filePath, displayName } = memoryManager.getPathForTarget(
       target,
       date,
+      project || undefined,
     );
 
     const timestamp = memoryManager.getLocalTimestamp();
@@ -309,10 +333,11 @@ async function handleEdit(
     oldString?: string;
     newString?: string;
     date?: string;
+    project?: string;
   },
   memoryManager: MemoryManager,
 ): Promise<string> {
-  const { target, oldString, newString, date } = params;
+  const { target, oldString, newString, date, project } = params;
 
   if (!target) {
     return "Error: target is required for edit action.";
@@ -330,6 +355,7 @@ async function handleEdit(
     const { filePath, displayName } = memoryManager.getPathForTarget(
       target,
       date,
+      project || undefined,
     );
     await memoryManager.editFile(filePath, oldString, newString);
     const timestamp = memoryManager.getLocalTimestamp();
@@ -340,10 +366,15 @@ async function handleEdit(
 }
 
 async function handleDelete(
-  params: { target?: string; timestamp?: string; date?: string },
+  params: {
+    target?: string;
+    timestamp?: string;
+    date?: string;
+    project?: string;
+  },
   memoryManager: MemoryManager,
 ): Promise<string> {
-  const { target, timestamp, date } = params;
+  const { target, timestamp, date, project } = params;
 
   if (!target) {
     return "Error: target is required for delete action.";
@@ -361,6 +392,7 @@ async function handleDelete(
       target,
       timestamp,
       date,
+      project || undefined,
     );
     return `${result}\n\nDeleted timestamp: ${timestamp}`;
   } catch (error) {
@@ -371,21 +403,35 @@ async function handleDelete(
 }
 
 async function handleSearch(
-  params: { query?: string; max_results?: number; period?: string },
+  params: {
+    query?: string;
+    max_results?: number;
+    period?: string;
+    scope?: string;
+  },
   memoryManager: MemoryManager,
+  projectId: string | null,
 ): Promise<string> {
-  const { query, max_results, period } = params;
+  const { query, max_results, period, scope } = params;
 
   if (!query) {
     return "Error: query is required for search action.";
   }
+
+  const effectiveProjectId =
+    scope === "project" ? projectId : scope === "global" ? null : projectId;
 
   try {
     const results = await memoryManager.semanticSearch(
       query,
       max_results ?? 20,
       period,
+      scope === "project" ? projectId : effectiveProjectId,
     );
+
+    if (scope === "project" && !projectId) {
+      return "No current project detected. Use --scope all or --scope global instead.";
+    }
 
     if (results.length === 0) {
       const periodMsg = period ? ` (filtered by period: ${period})` : "";

@@ -19,6 +19,7 @@ import {
   upsertFile,
   deleteFileVectors,
   type SearchResult as VectorSearchResult,
+  ProjectStore,
 } from "./vector-store.js";
 import {
   parseContentByTimestamp,
@@ -28,6 +29,7 @@ import {
 export class MemoryManager {
   private config: MemoryConfig;
   private dailyDir: string;
+  private projectStores: Map<string, ProjectStore> = new Map();
 
   constructor(config: MemoryConfig) {
     this.config = config;
@@ -59,13 +61,46 @@ export class MemoryManager {
     return path.join(this.dailyDir, `${date}.md`);
   }
 
+  getProjectStore(projectId: string): ProjectStore {
+    if (!this.projectStores.has(projectId)) {
+      this.projectStores.set(
+        projectId,
+        new ProjectStore(
+          path.join(this.config.memoryDir, "projects", projectId),
+        ),
+      );
+    }
+    return this.projectStores.get(projectId)!;
+  }
+
+  getProjectDir(projectId: string): string {
+    return path.join(this.config.memoryDir, "projects", projectId);
+  }
+
+  getProjectMemoryPath(projectId: string): string {
+    return path.join(this.getProjectDir(projectId), "MEMORY.md");
+  }
+
+  ensureProjectDirs(projectId: string): void {
+    const projectDir = this.getProjectDir(projectId);
+    if (!fs.existsSync(projectDir)) {
+      fs.mkdirSync(projectDir, { recursive: true });
+    }
+  }
+
   getPathForTarget(
     target: string,
     date?: string,
+    project?: string | null,
   ): { filePath: string; displayName: string } {
     switch (target) {
-      case "memory":
+      case "memory": {
+        if (project) {
+          const filePath = this.getProjectMemoryPath(project);
+          return { filePath, displayName: `projects/${project}/MEMORY.md` };
+        }
         return { filePath: this.getMemoryPath(), displayName: "MEMORY.md" };
+      }
       case "identity":
         return { filePath: this.getIdentityPath(), displayName: "IDENTITY.md" };
       case "user":
@@ -132,8 +167,13 @@ export class MemoryManager {
     target: string,
     timestamp: string,
     date?: string,
+    project?: string | null,
   ): Promise<string> {
-    const { filePath, displayName } = this.getPathForTarget(target, date);
+    const { filePath, displayName } = this.getPathForTarget(
+      target,
+      date,
+      project,
+    );
     const content = this.readFile(filePath);
 
     if (!content) {
@@ -195,6 +235,18 @@ export class MemoryManager {
           },
         })),
       );
+
+      const projectsDir = path.join(this.config.memoryDir, "projects");
+      if (filePath.startsWith(projectsDir + path.sep)) {
+        const relative = path.relative(projectsDir, filePath);
+        const projectId = relative.split(path.sep)[0];
+        if (projectId) {
+          const store = this.getProjectStore(projectId);
+          await store.upsertFile(filePath, embedded);
+          return;
+        }
+      }
+
       await upsertFile(filePath, embedded);
     } catch (err) {
       const errMsg = (err as Error).message;
@@ -227,7 +279,7 @@ export class MemoryManager {
     return this.fileExists(this.getBootstrapPath());
   }
 
-  getContextFiles(): ContextFile[] {
+  getContextFiles(projectId?: string | null): ContextFile[] {
     const files: ContextFile[] = [];
     const memoryContent = this.readFile(this.getMemoryPath());
     if (memoryContent?.trim()) {
@@ -240,6 +292,16 @@ export class MemoryManager {
     const userContent = this.readFile(this.getUserPath());
     if (userContent?.trim()) {
       files.push({ name: "USER.md", content: userContent.trim() });
+    }
+    if (projectId) {
+      const projectMemoryPath = this.getProjectMemoryPath(projectId);
+      const projectContent = this.readFile(projectMemoryPath);
+      if (projectContent?.trim()) {
+        files.push({
+          name: `Project: ${projectId}`,
+          content: projectContent.trim(),
+        });
+      }
     }
     return files;
   }
@@ -289,14 +351,23 @@ export class MemoryManager {
     query: string,
     maxResults: number = 20,
     period?: string,
+    projectId?: string | null,
   ): Promise<SemanticSearchResult[]> {
     const queryVector = await embedText(query);
-    const results = await import("./vector-store.js").then((m) =>
-      m.semanticSearch(queryVector, maxResults),
-    );
+    const module = await import("./vector-store.js");
+    const results = await module.semanticSearch(queryVector, maxResults);
+
+    if (projectId) {
+      const store = this.getProjectStore(projectId);
+      try {
+        const projectResults = await store.search(queryVector, maxResults);
+        results.push(...projectResults);
+        results.sort((a, b) => b.score - a.score);
+      } catch {}
+    }
 
     const resultsWithTimestamp: SemanticSearchResult[] = [];
-    for (const result of results) {
+    for (const result of results.slice(0, maxResults)) {
       const fileContent = this.readFile(result.filePath);
       let timestamp: string | undefined;
 

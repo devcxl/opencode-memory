@@ -1,5 +1,6 @@
 const VALID_TARGETS = ["memory", "identity", "user", "daily", "bootstrap"];
 const VALID_ACTIONS = ["read", "write", "edit", "delete", "search", "list"];
+const VALID_SCOPES = ["all", "global", "project"];
 const MAX_CONTENT_SIZE = 100 * 1024;
 const MAX_MEMORY_LINES = 1000;
 
@@ -57,5 +58,13 @@ export function checkLineLimit(filePath: string, content: string): void {
         `MEMORY.md exceeds ${MAX_MEMORY_LINES} line limit (current: ${lines} lines). Use memory_delete to remove entries by timestamp.`,
       );
     }
+  }
+}
+
+export function validateScope(scope: string): void {
+  if (!VALID_SCOPES.includes(scope)) {
+    throw new Error(
+      `Invalid scope: ${scope}. Must be one of: ${VALID_SCOPES.join(", ")}`,
+    );
   }
 }
