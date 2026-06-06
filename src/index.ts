@@ -15,6 +15,7 @@ import { handleEdit } from "./handlers/handleEdit.js";
 import { handleDelete } from "./handlers/handleDelete.js";
 import { handleSearch } from "./handlers/handleSearch.js";
 import { handleList } from "./handlers/handleList.js";
+import { applyDefaultProject } from "./utils/defaultProject.js";
 
 /** 追踪当前会话中的 memory 工具调用记录，用于在 session 超时时提示更新 daily log。 */
 interface SessionState {
@@ -269,16 +270,17 @@ export const MemoryPlugin: Plugin = async (ctx: PluginInput) => {
         async execute(args) {
           memoryManager.ensureDirectories();
           validateAction(args.action);
+          const projectArgs = applyDefaultProject(args, projectId);
 
           switch (args.action) {
             case "read":
-              return handleRead(args, memoryManager);
+              return handleRead(projectArgs, memoryManager);
             case "write":
-              return handleWrite(args, memoryManager);
+              return handleWrite(projectArgs, memoryManager);
             case "edit":
-              return handleEdit(args, memoryManager);
+              return handleEdit(projectArgs, memoryManager);
             case "delete":
-              return handleDelete(args, memoryManager);
+              return handleDelete(projectArgs, memoryManager);
             case "search":
               return handleSearch(args, memoryManager, projectId);
             case "list":

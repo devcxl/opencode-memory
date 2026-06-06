@@ -10,6 +10,7 @@ const upsertCalls: Array<{ filePath: string; chunks: any[] }> = [];
 const projectStoreBasePaths: string[] = [];
 const semanticSearchCalls: number[] = [];
 let semanticResults: any[] = [];
+let configMemoryDir = "";
 
 mock.module("../src/search/embedding.js", () => ({
   embedText: async (text: string) => {
@@ -50,9 +51,34 @@ mock.module("../src/search/vector-store.js", () => ({
   },
 }));
 
+mock.module("@opencode-ai/plugin", () => ({
+  tool: Object.assign((definition: any) => definition, {
+    schema: {
+      enum: () => ({
+        optional: () => ({ describe: () => ({}) }),
+        describe: () => ({}),
+      }),
+      number: () => ({ optional: () => ({ describe: () => ({}) }) }),
+      string: () => ({ optional: () => ({ describe: () => ({}) }) }),
+    },
+  }),
+}));
+
+mock.module("../src/utils/projectDetector.js", () => ({
+  detectProject: () => "owner/repo",
+}));
+
+mock.module("../src/utils/config.js", () => ({
+  ensureDir: (dir: string) => fs.mkdirSync(dir, { recursive: true }),
+  getMemoryDir: () => configMemoryDir,
+  loadConfig: () => ({ memoryDir: configMemoryDir }),
+}));
+
 const { MemoryManager } = await import("../src/memory/MemoryManager.js");
 const { FileSearcher } = await import("../src/memory/FileSearcher.js");
 const { handleWrite } = await import("../src/handlers/handleWrite.js");
+const { applyDefaultProject } = await import("../src/utils/defaultProject.js");
+const { MemoryPlugin } = await import("../src/index.js");
 const { gitCommit } = await import("../src/utils/git.js");
 
 beforeEach(() => {
@@ -61,6 +87,7 @@ beforeEach(() => {
   projectStoreBasePaths.length = 0;
   semanticSearchCalls.length = 0;
   semanticResults = [];
+  configMemoryDir = "";
 });
 
 function makeTempHome(): { homeDir: string; memoryDir: string } {
@@ -234,6 +261,105 @@ test("nested project memory indexes into the matching owner/repo project store",
   } finally {
     fs.rmSync(homeDir, { recursive: true, force: true });
   }
+});
+
+test("memory writes default to the detected project when project is omitted", async () => {
+  const { homeDir, memoryDir } = makeTempHome();
+
+  try {
+    await withHome(homeDir, async () => {
+      const manager = new MemoryManager({ memoryDir });
+      manager.ensureDirectories();
+
+      await handleWrite(
+        applyDefaultProject(
+          {
+            action: "write",
+            target: "memory",
+            content: "## Project\ndefault project searchable content",
+          },
+          "owner/repo",
+        ),
+        manager,
+      );
+
+      expect(upsertCalls[0].filePath).toBe(
+        path.join(memoryDir, "projects", "owner", "repo", "MEMORY.md"),
+      );
+      expect(fs.existsSync(path.join(memoryDir, "MEMORY.md"))).toBe(false);
+    });
+  } finally {
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  }
+});
+
+test("memory tool writes default to the detected project when project is omitted", async () => {
+  const { homeDir, memoryDir } = makeTempHome();
+
+  try {
+    await withHome(homeDir, async () => {
+      configMemoryDir = memoryDir;
+      const hooks = await MemoryPlugin({} as any);
+
+      await hooks.tool!.memory.execute({
+        action: "write",
+        target: "memory",
+        content: "## Project\nplugin default project content",
+      });
+
+      expect(upsertCalls[0].filePath).toBe(
+        path.join(memoryDir, "projects", "owner", "repo", "MEMORY.md"),
+      );
+      expect(fs.existsSync(path.join(memoryDir, "MEMORY.md"))).toBe(false);
+    });
+  } finally {
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  }
+});
+
+test("memory tool reads default to the detected project when project is omitted", async () => {
+  const { homeDir, memoryDir } = makeTempHome();
+
+  try {
+    await withHome(homeDir, async () => {
+      configMemoryDir = memoryDir;
+      const projectMemoryPath = path.join(
+        memoryDir,
+        "projects",
+        "owner",
+        "repo",
+        "MEMORY.md",
+      );
+      fs.mkdirSync(path.dirname(projectMemoryPath), { recursive: true });
+      fs.writeFileSync(path.join(memoryDir, "MEMORY.md"), "global content", "utf-8");
+      fs.writeFileSync(projectMemoryPath, "project content", "utf-8");
+
+      const hooks = await MemoryPlugin({} as any);
+      const result = await hooks.tool!.memory.execute({
+        action: "read",
+        target: "memory",
+      });
+
+      expect(result).toBe("project content");
+    });
+  } finally {
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  }
+});
+
+test("default project helper scopes supported memory actions", () => {
+  expect(
+    applyDefaultProject({ action: "read", target: "memory" }, "owner/repo"),
+  ).toHaveProperty("project", "owner/repo");
+  expect(
+    applyDefaultProject({ action: "write", target: "memory" }, null),
+  ).not.toHaveProperty("project");
+  expect(
+    applyDefaultProject({ action: "edit", target: "memory" }, "owner/repo"),
+  ).not.toHaveProperty("project");
+  expect(
+    applyDefaultProject({ action: "delete", target: "memory" }, "owner/repo"),
+  ).not.toHaveProperty("project");
 });
 
 test("semantic search filters by the matched chunk timestamp", async () => {
