@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import * as fs from "node:fs";
+import { isInitTemplateContent } from "./templates.js";
 
 /** 检查 memory 系统的初始化状态，区分未初始化/引导中/就绪三种状态 */
 export class StateChecker {
@@ -38,14 +39,19 @@ export class StateChecker {
     }
 
     const memoryContent = this.readContent(memoryPath);
-    if (!memoryContent?.trim() || this.isTemplateContent(memoryContent)) {
+    if (!memoryContent?.trim() || isInitTemplateContent(memoryContent)) {
       return "uninitialized";
     }
 
     const identityContent = this.readContent(identityPath);
     const userContent = this.readContent(userPath);
 
-    if (identityContent?.trim() && userContent?.trim()) {
+    if (
+      identityContent?.trim() &&
+      userContent?.trim() &&
+      !isInitTemplateContent(identityContent) &&
+      !isInitTemplateContent(userContent)
+    ) {
       return "ready";
     }
 
@@ -59,32 +65,5 @@ export class StateChecker {
     } catch {
       return null;
     }
-  }
-
-  /**
-   * 判断内容是否仍是初始化时写入的空模板
-   * 通过检查标题匹配后，剔除占位符括号内容，看剩余有效字符是否过少
-   */
-  private isTemplateContent(content: string): boolean {
-    const trimmed = content.trim();
-    if (!trimmed) return true;
-
-    const templateHeadings = [
-      "# MEMORY.md - Long-Term Memory",
-      "# IDENTITY.md - Agent Identity",
-      "# USER.md - User Profile",
-    ];
-
-    if (!templateHeadings.some((h) => trimmed.startsWith(h))) {
-      return false;
-    }
-
-    const body = trimmed
-      .replace(/^#.*\n?/, "")
-      .replace(/\([^)]*\)/g, "")
-      .trim();
-
-    const substantive = body.replace(/[^a-zA-Z0-9\u4e00-\u9fff]/g, "");
-    return substantive.length < 50;
   }
 }
