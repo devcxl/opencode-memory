@@ -1,7 +1,6 @@
 import * as path from "node:path";
 import * as fs from "node:fs";
 import type {
-  MemoryConfig,
   SearchResult,
   ListResult,
   ContextFile,
@@ -9,11 +8,17 @@ import type {
   SemanticSearchResult,
   MonthGroup,
 } from "../types.js";
-import { ensureDir, getMemoryDir } from "../utils/config.js";
+import type { MemoryConfig } from "../config/runtime.js";
+import { ensureDir } from "../utils/fs.js";
+import { MemoryPaths } from "./MemoryPaths.js";
 import { atomicWrite } from "../utils/atomicWrite.js";
 import { checkLineLimit, validateProjectId } from "../utils/validation.js";
 import { gitCommit } from "../utils/git.js";
-import { embedText } from "../search/embedding.js";
+import {
+  embedText,
+  getCurrentDtype,
+  getCurrentModelId,
+} from "../search/embedding.js";
 import { chunkMarkdown } from "../search/chunker.js";
 import {
   upsertFile,
@@ -27,18 +32,18 @@ import { FileSearcher } from "./FileSearcher.js";
 /** 内存系统的核心管理器，统一管理文件读写、向量索引、语义搜索、状态检查等能力 */
 export class MemoryManager {
   private config: MemoryConfig;
-  private dailyDir: string;
+  private paths: MemoryPaths;
   private projectStores: Map<string, ProjectStore> = new Map();
   private stateChecker: StateChecker;
   private fileSearcher: FileSearcher;
 
   constructor(config: MemoryConfig) {
     this.config = config;
-    this.dailyDir = path.join(config.memoryDir, "daily");
+    this.paths = new MemoryPaths(config.memoryDir);
     this.stateChecker = new StateChecker(config.memoryDir);
     this.fileSearcher = new FileSearcher(
       config.memoryDir,
-      this.dailyDir,
+      this.paths.dailyDir,
       (p) => this.readFile(p),
       (id) => this.getProjectStore(id),
     );
@@ -47,27 +52,27 @@ export class MemoryManager {
   /** 确保 memory 和 daily 目录存在 */
   ensureDirectories(): void {
     ensureDir(this.config.memoryDir);
-    ensureDir(this.dailyDir);
+    ensureDir(this.paths.dailyDir);
   }
 
   /** 获取全局 MEMORY.md 路径 */
   getMemoryPath(): string {
-    return path.join(this.config.memoryDir, "MEMORY.md");
+    return this.paths.memoryPath;
   }
 
   /** 获取 IDENTITY.md 路径 */
   getIdentityPath(): string {
-    return path.join(this.config.memoryDir, "IDENTITY.md");
+    return this.paths.identityPath;
   }
 
   /** 获取 USER.md 路径 */
   getUserPath(): string {
-    return path.join(this.config.memoryDir, "USER.md");
+    return this.paths.userPath;
   }
 
   /** 获取 BOOTSTRAP.md 路径 */
   getBootstrapPath(): string {
-    return path.join(this.config.memoryDir, "BOOTSTRAP.md");
+    return this.paths.bootstrapPath;
   }
 
   /**
@@ -75,7 +80,7 @@ export class MemoryManager {
    * @param date 日期字符串，格式 YYYY-MM-DD
    */
   getDailyPath(date: string): string {
-    return path.join(this.dailyDir, `${date}.md`);
+    return this.paths.dailyPath(date);
   }
 
   /**
@@ -87,9 +92,7 @@ export class MemoryManager {
     if (!this.projectStores.has(projectId)) {
       this.projectStores.set(
         projectId,
-        new ProjectStore(
-          path.join(this.config.memoryDir, "projects", projectId),
-        ),
+        new ProjectStore(this.paths.projectDir(projectId)),
       );
     }
     return this.projectStores.get(projectId)!;
@@ -98,12 +101,13 @@ export class MemoryManager {
   /** 获取项目目录路径 */
   getProjectDir(projectId: string): string {
     validateProjectId(projectId);
-    return path.join(this.config.memoryDir, "projects", projectId);
+    return this.paths.projectDir(projectId);
   }
 
   /** 获取项目级 MEMORY.md 路径 */
   getProjectMemoryPath(projectId: string): string {
-    return path.join(this.getProjectDir(projectId), "MEMORY.md");
+    validateProjectId(projectId);
+    return this.paths.projectMemoryPath(projectId);
   }
 
   /** 确保项目目录存在，不存在则递归创建 */
@@ -303,6 +307,8 @@ export class MemoryManager {
   ): Promise<void> {
     try {
       const chunks = chunkMarkdown(content, filePath);
+      const embeddingModel = getCurrentModelId();
+      const embeddingDtype = getCurrentDtype();
       const embedded = await Promise.all(
         chunks.map(async (chunk) => ({
           vector: await embedText(chunk.text),
@@ -311,12 +317,14 @@ export class MemoryManager {
             heading: chunk.heading,
             text: chunk.text,
             hash: chunk.hash,
+            embeddingModel,
+            embeddingDtype,
             ...(chunk.timestamp ? { timestamp: chunk.timestamp } : {}),
           },
         })),
       );
 
-      const projectsDir = path.join(this.config.memoryDir, "projects");
+      const projectsDir = this.paths.projectsDir;
       if (filePath.startsWith(projectsDir + path.sep)) {
         const relative = path.relative(projectsDir, filePath);
         const projectId = path.dirname(relative).split(path.sep).join("/");

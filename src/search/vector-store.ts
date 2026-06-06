@@ -1,16 +1,20 @@
 import { LocalIndex } from "vectra";
 import * as path from "node:path";
-import { getMemoryDir } from "../utils/config.js";
+import { getMemoryDir } from "../config/runtime.js";
+import { MemoryPaths } from "../memory/MemoryPaths.js";
+import { getCurrentDtype, getCurrentModelId } from "./embedding.js";
+
+const memoryPaths = new MemoryPaths(getMemoryDir());
 
 let rootIndex: LocalIndex | null = null;
 let dailyIndex: LocalIndex | null = null;
 
 function getRootIndexPath(): string {
-  return path.join(getMemoryDir(), "root.index");
+  return memoryPaths.rootIndexPath;
 }
 
 function getDailyIndexPath(): string {
-  return path.join(getMemoryDir(), "daily.index");
+  return memoryPaths.dailyIndexPath;
 }
 
 async function getRootIndex(): Promise<LocalIndex> {
@@ -19,6 +23,7 @@ async function getRootIndex(): Promise<LocalIndex> {
     if (!(await rootIndex.isIndexCreated())) {
       await rootIndex.createIndex();
     }
+    await deleteStaleEmbeddings(rootIndex);
   }
   return rootIndex;
 }
@@ -29,6 +34,7 @@ async function getDailyIndex(): Promise<LocalIndex> {
     if (!(await dailyIndex.isIndexCreated())) {
       await dailyIndex.createIndex();
     }
+    await deleteStaleEmbeddings(dailyIndex);
   }
   return dailyIndex;
 }
@@ -40,6 +46,24 @@ async function getQueryLimit(index: LocalIndex, topK: number): Promise<number> {
 
   const items = await index.listItems();
   return Math.max(items.length, 1);
+}
+
+export function isCurrentEmbeddingMetadata(
+  metadata: Record<string, unknown> | undefined,
+): boolean {
+  return (
+    String(metadata?.embeddingModel) === getCurrentModelId() &&
+    String(metadata?.embeddingDtype) === getCurrentDtype()
+  );
+}
+
+async function deleteStaleEmbeddings(index: LocalIndex): Promise<void> {
+  const items = await index.listItems();
+  for (const item of items) {
+    if (!isCurrentEmbeddingMetadata(item.metadata)) {
+      await index.deleteItem(String(item.id));
+    }
+  }
 }
 
 /**
@@ -63,12 +87,26 @@ async function upsertChunks(
 ): Promise<void> {
   const existing = await index.listItems();
   const existingByHash = new Map<string, string>();
+  const chunksByHash = new Map(
+    chunks.map((chunk) => [chunk.metadata.hash, chunk]),
+  );
   const toDelete: string[] = [];
 
   for (const item of existing) {
     if (item.metadata && String(item.metadata.filePath) === filePath) {
       const hash = item.metadata.hash ? String(item.metadata.hash) : null;
       if (hash) {
+        const chunk = chunksByHash.get(hash);
+        if (
+          chunk &&
+          (String(item.metadata.embeddingModel) !==
+            chunk.metadata.embeddingModel ||
+            String(item.metadata.embeddingDtype) !==
+              chunk.metadata.embeddingDtype)
+        ) {
+          toDelete.push(String(item.id));
+          continue;
+        }
         existingByHash.set(hash, String(item.id));
       } else {
         toDelete.push(String(item.id));
@@ -128,6 +166,27 @@ export interface SearchResult {
   timestamp?: string;
 }
 
+interface QuerySearchItem {
+  score: number;
+  item: { metadata: Record<string, unknown> };
+}
+
+export function filterCurrentSearchResults(
+  items: QuerySearchItem[],
+): SearchResult[] {
+  return items
+    .filter((item) => isCurrentEmbeddingMetadata(item.item.metadata))
+    .map((item) => ({
+      score: item.score,
+      filePath: String(item.item.metadata.filePath),
+      heading: String(item.item.metadata.heading),
+      text: String(item.item.metadata.text),
+      timestamp: item.item.metadata.timestamp
+        ? String(item.item.metadata.timestamp)
+        : undefined,
+    }));
+}
+
 /**
  * 在 root 和 daily 两套索引中同时执行语义搜索，合并后按得分降序取 topK。
  *
@@ -153,29 +212,10 @@ export async function semanticSearch(
     dailyIdx.queryItems(queryVector, "", dailyTopK),
   ]);
 
-  for (const item of rootResults) {
-    results.push({
-      score: item.score,
-      filePath: String(item.item.metadata.filePath),
-      heading: String(item.item.metadata.heading),
-      text: String(item.item.metadata.text),
-      timestamp: item.item.metadata.timestamp
-        ? String(item.item.metadata.timestamp)
-        : undefined,
-    });
-  }
-
-  for (const item of dailyResults) {
-    results.push({
-      score: item.score,
-      filePath: String(item.item.metadata.filePath),
-      heading: String(item.item.metadata.heading),
-      text: String(item.item.metadata.text),
-      timestamp: item.item.metadata.timestamp
-        ? String(item.item.metadata.timestamp)
-        : undefined,
-    });
-  }
+  results.push(...filterCurrentSearchResults(rootResults as QuerySearchItem[]));
+  results.push(
+    ...filterCurrentSearchResults(dailyResults as QuerySearchItem[]),
+  );
 
   results.sort((a, b) => b.score - a.score);
   return results.slice(0, topK);
@@ -228,6 +268,7 @@ export class ProjectStore {
       if (!(await this.rootIndex.isIndexCreated())) {
         await this.rootIndex.createIndex();
       }
+      await deleteStaleEmbeddings(this.rootIndex);
     }
     return this.rootIndex;
   }
@@ -255,15 +296,7 @@ export class ProjectStore {
     const index = await this.getIndex();
     const limit = await getQueryLimit(index, topK);
     const items = await index.queryItems(queryVector, "", limit);
-    return items.map((item) => ({
-      score: item.score,
-      filePath: String(item.item.metadata.filePath),
-      heading: String(item.item.metadata.heading),
-      text: String(item.item.metadata.text),
-      timestamp: item.item.metadata.timestamp
-        ? String(item.item.metadata.timestamp)
-        : undefined,
-    }));
+    return filterCurrentSearchResults(items as QuerySearchItem[]);
   }
 
   /** 检查项目索引中是否存在已索引的数据 */

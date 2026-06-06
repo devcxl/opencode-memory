@@ -1,6 +1,6 @@
 import type { Plugin, PluginInput } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
-import { loadConfig } from "./utils/config.js";
+import { loadConfig } from "./config/runtime.js";
 import { MemoryManager } from "./memory/MemoryManager.js";
 import { BootstrapManager } from "./memory/BootstrapManager.js";
 import { detectProject } from "./utils/projectDetector.js";

@@ -1,6 +1,7 @@
 import { execSync } from "node:child_process";
 import * as os from "node:os";
 import * as path from "node:path";
+import { getMemoryDir } from "../config/runtime.js";
 
 /**
  * 探测当前目录所属的项目标识。
@@ -32,13 +33,7 @@ export function detectProject(cwd: string = process.cwd()): string | null {
 
   if (cwd === homeDir) return null;
 
-  // 排除 memory 自身目录，避免无限递归
-  const memoryDirCandidate = path.join(
-    homeDir,
-    ".config",
-    "opencode",
-    "memory",
-  );
+  const memoryDirCandidate = getMemoryDir();
   if (
     cwd.startsWith(memoryDirCandidate + path.sep) ||
     cwd === memoryDirCandidate

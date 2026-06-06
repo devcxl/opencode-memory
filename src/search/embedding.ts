@@ -4,9 +4,12 @@ process.env.ORT_LOGGING_LEVEL = "error";
 import { pipeline } from "@huggingface/transformers";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import {
+  EMBEDDING_MODEL as MODEL,
+  EMBEDDING_DTYPE as DTYPE,
+} from "../config/embedding.js";
 
-let embedder: any = null;
-let initPromise: Promise<void> | null = null;
+// ─── 缓存管理 ────────────────────────────────────────────────
 
 function getModelCachePath(): string {
   const pluginDir = path.dirname(path.dirname(__dirname));
@@ -23,8 +26,8 @@ function isModelCacheValid(): boolean {
   const cachePath = getModelCachePath();
   const modelPath = path.join(
     cachePath,
-    "nomic-ai",
-    "nomic-embed-text-v1.5",
+    MODEL.org,
+    MODEL.repo,
     "onnx",
     "model.onnx",
   );
@@ -44,13 +47,18 @@ function isModelCacheValid(): boolean {
 function clearModelCache(): void {
   try {
     const cachePath = getModelCachePath();
-    const modelPath = path.join(cachePath, "nomic-ai", "nomic-embed-text-v1.5");
+    const modelPath = path.join(cachePath, MODEL.org, MODEL.repo);
 
     if (fs.existsSync(modelPath)) {
       fs.rmSync(modelPath, { recursive: true, force: true });
     }
   } catch {}
 }
+
+// ─── 单例 pipeline ───────────────────────────────────────────
+
+let embedder: any = null;
+let initPromise: Promise<void> | null = null;
 
 /**
  * 初始化嵌入模型 pipeline。
@@ -69,17 +77,12 @@ export async function initEmbedder(): Promise<void> {
             clearModelCache();
           }
 
-          embedder = await pipeline(
-            "feature-extraction",
-            "nomic-ai/nomic-embed-text-v1.5",
-            {
-              dtype: "fp32",
-            },
-          );
+          embedder = await pipeline("feature-extraction", MODEL.modelId, {
+            dtype: DTYPE,
+          });
           return;
         } catch (err) {
           const errMsg = (err as Error).message;
-          // Protobuf 解析失败通常意味着模型文件损坏，需要重试
           if (
             errMsg.includes("Protobuf parsing failed") ||
             errMsg.includes("corrupt")
@@ -129,4 +132,19 @@ export async function embedText(text: string): Promise<number[]> {
 /** 检查 embedder 是否已完成初始化 */
 export async function isInitialized(): Promise<boolean> {
   return embedder !== null;
+}
+
+/** 获取当前模型的向量维度 */
+export function getEmbeddingDimensions(): number {
+  return MODEL.dimensions;
+}
+
+/** 获取当前模型 ID（用于日志/调试） */
+export function getCurrentModelId(): string {
+  return MODEL.modelId;
+}
+
+/** 获取当前模型 dtype（用于索引失效判断） */
+export function getCurrentDtype(): string {
+  return DTYPE;
 }

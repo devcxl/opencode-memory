@@ -1,7 +1,7 @@
 import { $ } from "bun";
 import * as path from "node:path";
 import * as fs from "node:fs";
-import { getMemoryDir } from "./config.js";
+import { getMemoryDir } from "../config/runtime.js";
 
 /**
  * 确保 memory 目录是一个 git 仓库。

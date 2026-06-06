@@ -1,13 +1,3 @@
-/** 内存插件配置 */
-export interface MemoryConfig {
-  memoryDir: string;
-}
-
-/** 默认配置 */
-export const DEFAULT_CONFIG: MemoryConfig = {
-  memoryDir: "",
-};
-
 /** 内存文件目标类型 */
 export type MemoryTarget =
   | "memory"
