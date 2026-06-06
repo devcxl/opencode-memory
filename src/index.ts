@@ -26,6 +26,11 @@ interface SessionState {
   lastDailyUpdate: string | null;
 }
 
+interface MemoryCallArgs {
+  action?: string;
+  target?: string;
+}
+
 const sessionStates = new Map<string, SessionState>();
 
 /**
@@ -110,7 +115,12 @@ export const MemoryPlugin: Plugin = async (ctx: PluginInput) => {
     },
 
     event: async ({ event }) => {
-      const sessionID = (event as any).sessionID || (event as any).session_id;
+      const sessionID =
+        event.type === "session.idle"
+          ? event.properties.sessionID
+          : event.type === "session.created" || event.type === "session.deleted"
+            ? event.properties.info.id
+            : undefined;
 
       if (event.type === "session.created" && sessionID) {
         sessionStates.set(sessionID, {
@@ -145,15 +155,16 @@ export const MemoryPlugin: Plugin = async (ctx: PluginInput) => {
       if (input.tool === "memory") {
         const sessionID = input.sessionID;
         const state = sessionStates.get(sessionID);
+        const args = input.args as MemoryCallArgs;
 
         if (state) {
           state.memoryOperations.push({
-            action: (input.args as any).action,
-            target: (input.args as any).target,
+            action: args.action ?? "unknown",
+            target: args.target ?? "unknown",
             timestamp: new Date().toISOString(),
           });
 
-          if ((input.args as any).target === "daily") {
+          if (args.target === "daily") {
             state.lastDailyUpdate = new Date().toISOString();
           }
         }

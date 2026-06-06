@@ -1,4 +1,5 @@
 import type { MemoryManager } from "../memory/MemoryManager.js";
+import { validateScope } from "../utils/validation.js";
 
 /**
  * 在内存文件中进行语义搜索，返回按相关性评分排序的结果。
@@ -23,6 +24,10 @@ export async function handleSearch(
 
   if (!query) {
     return "Error: query is required for search action.";
+  }
+
+  if (scope) {
+    validateScope(scope);
   }
 
   const effectiveProjectId =
