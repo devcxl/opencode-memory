@@ -76,7 +76,7 @@ export const MemoryPlugin: Plugin = async (ctx: PluginInput) => {
   return {
     config: async (cfg) => {
       const state = memoryManager.getInitState();
-      if (state === "uninitialized") {
+      if (state !== "ready") {
         cfg.command = {
           ...cfg.command,
           "memory-init": {
@@ -105,6 +105,7 @@ export const MemoryPlugin: Plugin = async (ctx: PluginInput) => {
 
     "command.execute.before": async (input) => {
       if (input.command !== "memory-init") return;
+      if (memoryManager.getInitState() === "ready") return;
       bootstrapManager.createInitTemplates();
     },
 
