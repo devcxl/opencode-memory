@@ -54,22 +54,13 @@ export interface EmbeddedChunk {
 }
 
 /**
- * 对单个文件的切片集合执行增量 upsert。
- *
- * 策略：通过 hash 比对实现增量更新——仅插入新切片、删除已消失的切片、
- * 跳过内容未变的切片。避免全量重建索引，降低 token 消耗。
- *
- * @param filePath - 文件路径，用于判断归属 root 还是 daily 索引
- * @param chunks  - 该文件最新的切片集合
+ * 基于 hash 对索引执行增量 upsert，被 upsertFile 和 ProjectStore.upsertFile 共用。
  */
-export async function upsertFile(
+async function upsertChunks(
+  index: LocalIndex,
   filePath: string,
   chunks: EmbeddedChunk[],
 ): Promise<void> {
-  const index = filePath.includes("/daily/")
-    ? await getDailyIndex()
-    : await getRootIndex();
-
   const existing = await index.listItems();
   const existingByHash = new Map<string, string>();
   const toDelete: string[] = [];
@@ -80,7 +71,6 @@ export async function upsertFile(
       if (hash) {
         existingByHash.set(hash, String(item.id));
       } else {
-        // 无 hash 的老数据无法做增量比对，直接删除重建
         toDelete.push(String(item.id));
       }
     }
@@ -103,6 +93,25 @@ export async function upsertFile(
       await index.insertItem({ vector, metadata });
     }
   }
+}
+
+/**
+ * 对单个文件的切片集合执行增量 upsert。
+ *
+ * 策略：通过 hash 比对实现增量更新——仅插入新切片、删除已消失的切片、
+ * 跳过内容未变的切片。避免全量重建索引，降低 token 消耗。
+ *
+ * @param filePath - 文件路径，用于判断归属 root 还是 daily 索引
+ * @param chunks  - 该文件最新的切片集合
+ */
+export async function upsertFile(
+  filePath: string,
+  chunks: EmbeddedChunk[],
+): Promise<void> {
+  const index = filePath.includes("/daily/")
+    ? await getDailyIndex()
+    : await getRootIndex();
+  await upsertChunks(index, filePath, chunks);
 }
 
 /** 语义搜索返回的单条结果 */
@@ -192,21 +201,6 @@ export async function deleteFileVectors(filePath: string): Promise<void> {
 }
 
 /**
- * 检查指定索引中是否存在已索引的数据。
- * 用于判断 memory 系统是否需要首次重建。
- *
- * @param type - "root" 或 "daily"
- * @returns 索引中是否存在至少一条记录
- */
-export async function checkIndexExists(
-  type: "root" | "daily",
-): Promise<boolean> {
-  const index = type === "root" ? await getRootIndex() : await getDailyIndex();
-  const items = await index.listItems();
-  return items.length > 0;
-}
-
-/**
  * 项目级独立的向量存储。
  *
  * 与全局的 root/daily 分离，每个 ProjectStore 实例管理自己的 vectra 索引，
@@ -240,46 +234,14 @@ export class ProjectStore {
 
   /**
    * 对项目中的单文件切片执行增量 upsert。
-   * 策略同全局 upsertFile：基于 hash 做增量比对。
+   * 委托给共享的 upsertChunks 逻辑。
    *
    * @param filePath - 文件路径
    * @param chunks   - 该文件最新的切片集合
    */
   async upsertFile(filePath: string, chunks: EmbeddedChunk[]): Promise<void> {
     const index = await this.getIndex();
-
-    const existing = await index.listItems();
-    const existingByHash = new Map<string, string>();
-    const toDelete: string[] = [];
-
-    for (const item of existing) {
-      if (item.metadata && String(item.metadata.filePath) === filePath) {
-        const hash = item.metadata.hash ? String(item.metadata.hash) : null;
-        if (hash) {
-          existingByHash.set(hash, String(item.id));
-        } else {
-          toDelete.push(String(item.id));
-        }
-      }
-    }
-
-    const newHashes = new Set(chunks.map((c) => c.metadata.hash));
-
-    for (const [hash, id] of existingByHash) {
-      if (!newHashes.has(hash)) {
-        toDelete.push(id);
-      }
-    }
-
-    for (const id of toDelete) {
-      await index.deleteItem(id);
-    }
-
-    for (const { vector, metadata } of chunks) {
-      if (!existingByHash.has(metadata.hash)) {
-        await index.insertItem({ vector, metadata });
-      }
-    }
+    await upsertChunks(index, filePath, chunks);
   }
 
   /**

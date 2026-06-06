@@ -435,55 +435,6 @@ export class MemoryManager {
     return this.fileSearcher.listFiles();
   }
 
-  /**
-   * 首次运行时对所有已有文件建立向量索引
-   * 仅当根存储和 daily 存储均无索引时才执行，避免重复消耗
-   */
-  async embedAllExistingFiles(): Promise<void> {
-    const rootIndexExists = await import("../search/vector-store.js").then(
-      (m) => m.checkIndexExists("root"),
-    );
-    const dailyIndexExists = await import("../search/vector-store.js").then(
-      (m) => m.checkIndexExists("daily"),
-    );
-
-    const hasExistingIndex = rootIndexExists || dailyIndexExists;
-
-    if (hasExistingIndex) {
-      return;
-    }
-
-    const { root, daily } = this.listFiles();
-
-    const filesToEmbed: Array<{ filePath: string; content: string }> = [];
-
-    for (const file of root) {
-      const filePath = path.join(this.config.memoryDir, file);
-      const content = this.readFile(filePath);
-      if (content) {
-        filesToEmbed.push({ filePath, content });
-      }
-    }
-
-    for (const file of daily) {
-      const filePath = path.join(this.dailyDir, file);
-      const content = this.readFile(filePath);
-      if (content) {
-        filesToEmbed.push({ filePath, content });
-      }
-    }
-
-    for (const { filePath, content } of filesToEmbed) {
-      try {
-        await this.embedAndIndex(filePath, content);
-      } catch (err) {
-        console.error(
-          `[embedding] Failed to embed ${filePath}: ${(err as Error).message}`,
-        );
-      }
-    }
-  }
-
   /** 委托给 FileSearcher：列出文件及其时间戳 */
   listFilesWithTimestamps(
     limit: number = 7,
