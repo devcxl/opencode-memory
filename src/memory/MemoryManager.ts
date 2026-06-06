@@ -8,59 +8,80 @@ import type {
   TimestampEntry,
   SemanticSearchResult,
   MonthGroup,
-} from "./types.js";
-import { ensureDir, getMemoryDir } from "./config.js";
-import { atomicWrite } from "./atomicWrite.js";
-import { checkLineLimit } from "./validation.js";
-import { gitCommit } from "./git.js";
-import { embedText } from "./embedding.js";
-import { chunkMarkdown } from "./chunker.js";
+} from "../types.js";
+import { ensureDir, getMemoryDir } from "../utils/config.js";
+import { atomicWrite } from "../utils/atomicWrite.js";
+import { checkLineLimit } from "../utils/validation.js";
+import { gitCommit } from "../utils/git.js";
+import { embedText } from "../search/embedding.js";
+import { chunkMarkdown } from "../search/chunker.js";
 import {
   upsertFile,
   deleteFileVectors,
-  type SearchResult as VectorSearchResult,
   ProjectStore,
-} from "./vector-store.js";
-import {
-  parseContentByTimestamp,
-  extractTimestamps,
-} from "./timestampParser.js";
+} from "../search/vector-store.js";
+import { parseContentByTimestamp } from "../utils/timestampParser.js";
+import { StateChecker } from "./StateChecker.js";
+import { FileSearcher } from "./FileSearcher.js";
 
+/** 内存系统的核心管理器，统一管理文件读写、向量索引、语义搜索、状态检查等能力 */
 export class MemoryManager {
   private config: MemoryConfig;
   private dailyDir: string;
   private projectStores: Map<string, ProjectStore> = new Map();
+  private stateChecker: StateChecker;
+  private fileSearcher: FileSearcher;
 
   constructor(config: MemoryConfig) {
     this.config = config;
     this.dailyDir = path.join(config.memoryDir, "daily");
+    this.stateChecker = new StateChecker(config.memoryDir);
+    this.fileSearcher = new FileSearcher(
+      config.memoryDir,
+      this.dailyDir,
+      (p) => this.readFile(p),
+      (id) => this.getProjectStore(id),
+    );
   }
 
+  /** 确保 memory 和 daily 目录存在 */
   ensureDirectories(): void {
     ensureDir(this.config.memoryDir);
     ensureDir(this.dailyDir);
   }
 
+  /** 获取全局 MEMORY.md 路径 */
   getMemoryPath(): string {
     return path.join(this.config.memoryDir, "MEMORY.md");
   }
 
+  /** 获取 IDENTITY.md 路径 */
   getIdentityPath(): string {
     return path.join(this.config.memoryDir, "IDENTITY.md");
   }
 
+  /** 获取 USER.md 路径 */
   getUserPath(): string {
     return path.join(this.config.memoryDir, "USER.md");
   }
 
+  /** 获取 BOOTSTRAP.md 路径 */
   getBootstrapPath(): string {
     return path.join(this.config.memoryDir, "BOOTSTRAP.md");
   }
 
+  /**
+   * 获取指定日期的 daily 日志路径
+   * @param date 日期字符串，格式 YYYY-MM-DD
+   */
   getDailyPath(date: string): string {
     return path.join(this.dailyDir, `${date}.md`);
   }
 
+  /**
+   * 获取或创建指定项目的向量存储实例
+   * 使用延迟初始化，只在首次访问时创建 ProjectStore
+   */
   getProjectStore(projectId: string): ProjectStore {
     if (!this.projectStores.has(projectId)) {
       this.projectStores.set(
@@ -73,14 +94,17 @@ export class MemoryManager {
     return this.projectStores.get(projectId)!;
   }
 
+  /** 获取项目目录路径 */
   getProjectDir(projectId: string): string {
     return path.join(this.config.memoryDir, "projects", projectId);
   }
 
+  /** 获取项目级 MEMORY.md 路径 */
   getProjectMemoryPath(projectId: string): string {
     return path.join(this.getProjectDir(projectId), "MEMORY.md");
   }
 
+  /** 确保项目目录存在，不存在则递归创建 */
   ensureProjectDirs(projectId: string): void {
     const projectDir = this.getProjectDir(projectId);
     if (!fs.existsSync(projectDir)) {
@@ -88,6 +112,12 @@ export class MemoryManager {
     }
   }
 
+  /**
+   * 根据 target 类型解析文件路径和展示名，统一路径查找入口
+   * @param target 目标类型：memory | identity | user | daily
+   * @param date daily 类型时的日期
+   * @param project 项目级 memory 时的项目 ID
+   */
   getPathForTarget(
     target: string,
     date?: string,
@@ -117,10 +147,15 @@ export class MemoryManager {
     }
   }
 
+  /** 返回今天的日期字符串 YYYY-MM-DD */
   todayStr(): string {
     return new Date().toISOString().slice(0, 10);
   }
 
+  /**
+   * 读取文件内容，文件不存在或读取失败时返回 null 而非抛异常
+   * 避免调用方需要逐层 try/catch
+   */
   readFile(filePath: string): string | null {
     try {
       return fs.readFileSync(filePath, "utf-8");
@@ -129,6 +164,10 @@ export class MemoryManager {
     }
   }
 
+  /**
+   * 写入文件并触发向量索引与 git 提交
+   * 写入前校验行数限制，避免大文件失控
+   */
   async writeFile(filePath: string, content: string): Promise<void> {
     checkLineLimit(filePath, content);
     atomicWrite(filePath, content);
@@ -136,6 +175,10 @@ export class MemoryManager {
     await gitCommit(`Update ${path.basename(filePath)}`);
   }
 
+  /**
+   * 精确替换文件中的字符串段，用于细粒度编辑而非全量覆盖
+   * 要求 oldString 在文件中恰好出现一次，避免歧义覆盖
+   */
   async editFile(
     filePath: string,
     oldString: string,
@@ -163,6 +206,11 @@ export class MemoryManager {
     await gitCommit(`Edit ${path.basename(filePath)}`);
   }
 
+  /**
+   * 按时间戳删除文件中的条目
+   * 解析文件中的 `<!-- timestamp -->` 标记，删除匹配的条目后重写文件
+   * @returns 删除结果描述
+   */
   async deleteByTimestamp(
     target: string,
     timestamp: string,
@@ -200,6 +248,10 @@ export class MemoryManager {
     return `Deleted ${entries.length - filteredEntries.length} entries from ${displayName}`;
   }
 
+  /**
+   * 以追加方式写入文件，自动添加时间戳标记
+   * 用于 daily log 等持续追加的场景，不触发向量索引的异步等待
+   */
   appendFile(filePath: string, content: string): void {
     const existing = this.readFile(filePath);
     const separator = existing?.trim() ? "\n\n" : "";
@@ -212,12 +264,20 @@ export class MemoryManager {
     gitCommit(`Append to ${path.basename(filePath)}`);
   }
 
+  /**
+   * 获取本地时间戳字符串，用于标记每次写入的准确时间
+   * 使用本地时间而非 UTC，方便用户理解日志时间
+   */
   getLocalTimestamp(): string {
     const now = new Date();
     const pad = (n: number) => String(n).padStart(2, "0");
     return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
   }
 
+  /**
+   * 将文件内容分块、向量化并写入向量存储，供语义搜索使用
+   * 项目文件写入项目级 store，其余写入全局 store；静默跳过未初始化的引擎
+   */
   private async embedAndIndex(
     filePath: string,
     content: string,
@@ -256,6 +316,10 @@ export class MemoryManager {
     }
   }
 
+  /**
+   * 删除文件，忽略文件不存在的错误
+   * 用于清理临时或已废弃的 memory 文件
+   */
   deleteFile(filePath: string): void {
     try {
       fs.unlinkSync(filePath);
@@ -267,18 +331,38 @@ export class MemoryManager {
     }
   }
 
+  /** 检查文件是否存在 */
   fileExists(filePath: string): boolean {
     return fs.existsSync(filePath);
   }
 
+  /** 委托给 StateChecker：判断是否已初始化 */
   isInitialized(): boolean {
-    return this.fileExists(this.getMemoryPath());
+    return this.stateChecker.isInitialized();
   }
 
+  /** 委托给 StateChecker：判断是否需要首次引导 */
   needsBootstrap(): boolean {
-    return this.fileExists(this.getBootstrapPath());
+    return this.stateChecker.needsBootstrap();
   }
 
+  /** 委托给 StateChecker：获取初始化状态枚举 */
+  getInitState(): "uninitialized" | "bootstrapping" | "ready" {
+    return this.stateChecker.getInitState();
+  }
+
+  /**
+   * 同步写入文件，不触发向量索引和 git 提交
+   * 仅用于模板初始化等不需要追踪的场景
+   */
+  writeFileSync(filePath: string, content: string): void {
+    fs.writeFileSync(filePath, content, "utf-8");
+  }
+
+  /**
+   * 收集所有有内容的 context 文件，供 AI 构建提示词上下文
+   * 包含全局 MEMORY/IDENTITY/USER 以及可选的 project memory
+   */
   getContextFiles(projectId?: string | null): ContextFile[] {
     const files: ContextFile[] = [];
     const memoryContent = this.readFile(this.getMemoryPath());
@@ -306,125 +390,41 @@ export class MemoryManager {
     return files;
   }
 
+  /** 委托给 FileSearcher：关键词搜索 */
   searchFiles(query: string, maxResults: number): SearchResult[] {
-    const results: SearchResult[] = [];
-    const needle = query.toLowerCase();
-    const searchPaths = [
-      { dir: this.config.memoryDir, prefix: "" },
-      { dir: this.dailyDir, prefix: "daily" },
-    ];
-
-    for (const { dir, prefix } of searchPaths) {
-      if (results.length >= maxResults) break;
-      try {
-        const files = fs
-          .readdirSync(dir)
-          .filter((f) => f.endsWith(".md") && f !== "BOOTSTRAP.md");
-        for (const file of files) {
-          if (results.length >= maxResults) break;
-          const filePath = path.join(dir, file);
-          const content = this.readFile(filePath);
-          if (!content) continue;
-          const lines = content.split("\n");
-          for (
-            let i = 0;
-            i < lines.length && results.length < maxResults;
-            i++
-          ) {
-            if (lines[i].toLowerCase().includes(needle)) {
-              results.push({
-                file: prefix ? `${prefix}/${file}` : file,
-                line: i + 1,
-                text: lines[i].trimEnd(),
-              });
-            }
-          }
-        }
-      } catch {
-        continue;
-      }
-    }
-    return results;
+    return this.fileSearcher.searchFiles(query, maxResults);
   }
 
+  /** 委托给 FileSearcher：语义搜索 */
   async semanticSearch(
     query: string,
     maxResults: number = 20,
     period?: string,
     projectId?: string | null,
   ): Promise<SemanticSearchResult[]> {
-    const queryVector = await embedText(query);
-    const module = await import("./vector-store.js");
-    const results = await module.semanticSearch(queryVector, maxResults);
-
-    if (projectId) {
-      const store = this.getProjectStore(projectId);
-      try {
-        const projectResults = await store.search(queryVector, maxResults);
-        results.push(...projectResults);
-        results.sort((a, b) => b.score - a.score);
-      } catch {}
-    }
-
-    const resultsWithTimestamp: SemanticSearchResult[] = [];
-    for (const result of results.slice(0, maxResults)) {
-      const fileContent = this.readFile(result.filePath);
-      let timestamp: string | undefined;
-
-      if (fileContent) {
-        const timestamps = extractTimestamps(fileContent);
-        if (timestamps.length > 0) {
-          timestamp = timestamps[0];
-        }
-      }
-
-      if (period) {
-        if (timestamp && !timestamp.startsWith(period.replace("-", "-"))) {
-          continue;
-        }
-      }
-
-      resultsWithTimestamp.push({
-        ...result,
-        timestamp,
-      });
-    }
-
-    return resultsWithTimestamp;
-  }
-
-  listFiles(): ListResult {
-    const root: string[] = [];
-    const daily: string[] = [];
-
-    try {
-      const rootFiles = fs
-        .readdirSync(this.config.memoryDir)
-        .filter((f) => f.endsWith(".md"))
-        .sort();
-      for (const f of rootFiles) {
-        if (f !== "BOOTSTRAP.md") root.push(f);
-      }
-    } catch {}
-
-    try {
-      const dailyFiles = fs
-        .readdirSync(this.dailyDir)
-        .filter((f) => f.endsWith(".md"))
-        .sort()
-        .reverse();
-      daily.push(...dailyFiles);
-    } catch {}
-
-    return { root, daily };
-  }
-
-  async embedAllExistingFiles(): Promise<void> {
-    const rootIndexExists = await import("./vector-store.js").then((m) =>
-      m.checkIndexExists("root"),
+    return this.fileSearcher.semanticSearch(
+      query,
+      maxResults,
+      period,
+      projectId,
     );
-    const dailyIndexExists = await import("./vector-store.js").then((m) =>
-      m.checkIndexExists("daily"),
+  }
+
+  /** 委托给 FileSearcher：列出所有文件 */
+  listFiles(): ListResult {
+    return this.fileSearcher.listFiles();
+  }
+
+  /**
+   * 首次运行时对所有已有文件建立向量索引
+   * 仅当根存储和 daily 存储均无索引时才执行，避免重复消耗
+   */
+  async embedAllExistingFiles(): Promise<void> {
+    const rootIndexExists = await import("../search/vector-store.js").then(
+      (m) => m.checkIndexExists("root"),
+    );
+    const dailyIndexExists = await import("../search/vector-store.js").then(
+      (m) => m.checkIndexExists("daily"),
     );
 
     const hasExistingIndex = rootIndexExists || dailyIndexExists;
@@ -464,111 +464,25 @@ export class MemoryManager {
     }
   }
 
+  /** 委托给 FileSearcher：列出文件及其时间戳 */
   listFilesWithTimestamps(
     limit: number = 7,
   ): Array<{ name: string; timestamps: string[] }> {
-    const result: Array<{ name: string; timestamps: string[] }> = [];
-    const { root, daily } = this.listFiles();
-
-    for (const file of root) {
-      const filePath = path.join(this.config.memoryDir, file);
-      const content = this.readFile(filePath);
-      const timestamps = content ? extractTimestamps(content) : [];
-      result.push({ name: file, timestamps });
-    }
-
-    const recentDaily = daily.slice(0, limit);
-    const moreCount = daily.length - limit;
-
-    for (const file of recentDaily) {
-      const filePath = path.join(this.dailyDir, file);
-      const content = this.readFile(filePath);
-      const timestamps = content ? extractTimestamps(content) : [];
-      result.push({ name: `daily/${file}`, timestamps });
-    }
-
-    if (moreCount > 0) {
-      result.push({
-        name: `... and ${moreCount} more daily logs`,
-        timestamps: [],
-      });
-    }
-
-    return result;
+    return this.fileSearcher.listFilesWithTimestamps(limit);
   }
 
+  /** 委托给 FileSearcher：按月份分组列出文件 */
   listFilesGroupedByMonth(): {
     root: Array<{ name: string; timestamps: string[] }>;
     monthly: MonthGroup[];
   } {
-    const { root, daily } = this.listFiles();
-
-    const rootFiles: Array<{ name: string; timestamps: string[] }> = [];
-    for (const file of root) {
-      const filePath = path.join(this.config.memoryDir, file);
-      const content = this.readFile(filePath);
-      const timestamps = content ? extractTimestamps(content) : [];
-      rootFiles.push({ name: file, timestamps });
-    }
-
-    const monthlyMap = new Map<
-      string,
-      Array<{ name: string; timestamps: string[] }>
-    >();
-
-    for (const file of daily) {
-      const dateStr = file.replace(".md", "");
-      const month = dateStr.slice(0, 7);
-      const filePath = path.join(this.dailyDir, file);
-      const content = this.readFile(filePath);
-      const timestamps = content ? extractTimestamps(content) : [];
-
-      if (!monthlyMap.has(month)) {
-        monthlyMap.set(month, []);
-      }
-      monthlyMap.get(month)!.push({ name: `daily/${file}`, timestamps });
-    }
-
-    const monthly: MonthGroup[] = [];
-    for (const [month, files] of monthlyMap.entries()) {
-      const entryCount = files.reduce((sum, f) => sum + f.timestamps.length, 0);
-      monthly.push({
-        month,
-        fileCount: files.length,
-        entryCount,
-        files,
-      });
-    }
-
-    monthly.sort((a, b) => b.month.localeCompare(a.month));
-
-    return { root: rootFiles, monthly };
+    return this.fileSearcher.listFilesGroupedByMonth();
   }
 
+  /** 委托给 FileSearcher：按时间段筛选文件 */
   listFilesByPeriod(
     period: string,
   ): Array<{ name: string; timestamps: string[] }> {
-    const { daily } = this.listFiles();
-    const result: Array<{ name: string; timestamps: string[] }> = [];
-
-    const filteredDaily = daily.filter((file) => {
-      const dateStr = file.replace(".md", "");
-      if (period.length === 7) {
-        return dateStr.startsWith(period);
-      }
-      if (period.length === 4) {
-        return dateStr.startsWith(period);
-      }
-      return false;
-    });
-
-    for (const file of filteredDaily) {
-      const filePath = path.join(this.dailyDir, file);
-      const content = this.readFile(filePath);
-      const timestamps = content ? extractTimestamps(content) : [];
-      result.push({ name: `daily/${file}`, timestamps });
-    }
-
-    return result;
+    return this.fileSearcher.listFilesByPeriod(period);
   }
 }

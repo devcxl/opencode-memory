@@ -1,18 +1,23 @@
+/** 内存插件配置 */
 export interface MemoryConfig {
   memoryDir: string;
 }
 
+/** 默认配置 */
 export const DEFAULT_CONFIG: MemoryConfig = {
   memoryDir: "",
 };
 
+/** 内存文件目标类型 */
 export type MemoryTarget =
   | "memory"
   | "identity"
   | "user"
   | "daily"
   | "bootstrap";
+/** 写入模式 */
 export type WriteMode = "append" | "overwrite";
+/** 内存操作类型 */
 export type MemoryAction =
   | "read"
   | "write"
@@ -20,13 +25,16 @@ export type MemoryAction =
   | "delete"
   | "search"
   | "list";
+/** 搜索范围 */
 export type SearchScope = "all" | "global" | "project";
 
+/** 带时间戳的条目 */
 export interface TimestampEntry {
   timestamp: string;
   content: string;
 }
 
+/** 语义搜索结果 */
 export interface SemanticSearchResult {
   score: number;
   filePath: string;
@@ -35,6 +43,7 @@ export interface SemanticSearchResult {
   timestamp?: string;
 }
 
+/** 月度文件分组 */
 export interface MonthGroup {
   month: string;
   fileCount: number;
@@ -42,23 +51,20 @@ export interface MonthGroup {
   files: Array<{ name: string; timestamps: string[] }>;
 }
 
-export function isValidTimestamp(value: string): boolean {
-  const fullRegex = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
-  const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
-  return fullRegex.test(value) || dateRegex.test(value);
-}
-
+/** 搜索结果 */
 export interface SearchResult {
   file: string;
   line: number;
   text: string;
 }
 
+/** 列表结果 */
 export interface ListResult {
   root: string[];
   daily: string[];
 }
 
+/** 上下文文件 */
 export interface ContextFile {
   name: string;
   content: string;

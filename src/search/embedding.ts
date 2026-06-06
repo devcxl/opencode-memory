@@ -2,7 +2,6 @@ process.env.TRANSFORMERS_VERBOSITY = "error";
 process.env.ORT_LOGGING_LEVEL = "error";
 
 import { pipeline } from "@huggingface/transformers";
-import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -53,6 +52,11 @@ function clearModelCache(): void {
   } catch {}
 }
 
+/**
+ * 初始化嵌入模型 pipeline。
+ * 使用单例模式确保模型只加载一次，首次调用前检查缓存有效性，
+ * 若模型文件损坏则自动清缓存重试。
+ */
 export async function initEmbedder(): Promise<void> {
   if (!initPromise) {
     initPromise = (async () => {
@@ -75,6 +79,7 @@ export async function initEmbedder(): Promise<void> {
           return;
         } catch (err) {
           const errMsg = (err as Error).message;
+          // Protobuf 解析失败通常意味着模型文件损坏，需要重试
           if (
             errMsg.includes("Protobuf parsing failed") ||
             errMsg.includes("corrupt")
@@ -97,6 +102,10 @@ export async function initEmbedder(): Promise<void> {
   await initPromise;
 }
 
+/**
+ * 获取已初始化的 embedder 实例。
+ * 未初始化时自动触发 initEmbedder 初始化。
+ */
 export async function getEmbedder(): Promise<any> {
   if (!embedder) {
     await initEmbedder();
@@ -104,16 +113,20 @@ export async function getEmbedder(): Promise<any> {
   return embedder;
 }
 
+/**
+ * 对单段文本执行向量化，返回归一化后的嵌入向量。
+ * 使用 mean pooling + L2 normalize 确保余弦相似度一致性。
+ *
+ * @param text - 待编码文本
+ * @returns 浮点数向量数组
+ */
 export async function embedText(text: string): Promise<number[]> {
   const embedder = await getEmbedder();
   const output = await embedder(text, { pooling: "mean", normalize: true });
   return Array.from(output.data) as number[];
 }
 
-export function hashContent(text: string): string {
-  return crypto.createHash("sha256").update(text).digest("hex");
-}
-
+/** 检查 embedder 是否已完成初始化 */
 export async function isInitialized(): Promise<boolean> {
   return embedder !== null;
 }

@@ -1,3 +1,7 @@
+/**
+ * 内存感知指令，包含 Memory 工具的使用说明、写入指南、
+ * 决策树、自查清单和周期过滤方法。
+ */
 export const MEMORY_AWARENESS_INSTRUCTIONS = [
   "\n\n## Memory",
   "Memory files have been loaded above. Use the memory tool to manage them:",
@@ -79,6 +83,7 @@ export const MEMORY_AWARENESS_INSTRUCTIONS = [
   "- `memory_search({query: 'database', period: '2026-03'})` - search within specific period",
 ].join("\n");
 
+/** 首次运行的引导指令，提示用户完成身份与记忆文件配置 */
 export const BOOTSTRAP_INSTRUCTIONS = [
   "\n\n## Memory Setup",
   "This is your first run. Read BOOTSTRAP.md above and follow the setup instructions.",

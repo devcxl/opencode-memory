@@ -1,5 +1,5 @@
 import { MemoryManager } from "./MemoryManager.js";
-import { MEMORY_AWARENESS_INSTRUCTIONS } from "./memoryInstructions.js";
+import { MEMORY_AWARENESS_INSTRUCTIONS } from "../instructions/memoryInstructions.js";
 
 const BOOTSTRAP_TEMPLATE = (
   bootstrapPath: string,
@@ -103,6 +103,7 @@ const USER_TEMPLATE = `# USER.md - User Profile
 - **Communication Style**: (preferred interaction style)
 `;
 
+/** 管理首次运行的引导流程，负责创建模板文件和检查引导状态 */
 export class BootstrapManager {
   private memoryManager: MemoryManager;
 
@@ -110,33 +111,36 @@ export class BootstrapManager {
     this.memoryManager = memoryManager;
   }
 
-  initialize(): void {
+  /**
+   * 创建初始模板文件（BOOTSTRAP.md / MEMORY.md / IDENTITY.md / USER.md）
+   * 只在文件不存在时写入，不覆盖已有内容
+   */
+  createInitTemplates(): void {
     this.memoryManager.ensureDirectories();
-    if (!this.memoryManager.isInitialized()) {
-      this.copyTemplates();
+
+    const bootstrapPath = this.memoryManager.getBootstrapPath();
+    const memoryPath = this.memoryManager.getMemoryPath();
+    const identityPath = this.memoryManager.getIdentityPath();
+    const userPath = this.memoryManager.getUserPath();
+
+    if (!this.memoryManager.fileExists(bootstrapPath)) {
+      this.memoryManager.writeFileSync(
+        bootstrapPath,
+        BOOTSTRAP_TEMPLATE(bootstrapPath),
+      );
+    }
+    if (!this.memoryManager.fileExists(memoryPath)) {
+      this.memoryManager.writeFileSync(memoryPath, MEMORY_TEMPLATE);
+    }
+    if (!this.memoryManager.fileExists(identityPath)) {
+      this.memoryManager.writeFileSync(identityPath, IDENTITY_TEMPLATE);
+    }
+    if (!this.memoryManager.fileExists(userPath)) {
+      this.memoryManager.writeFileSync(userPath, USER_TEMPLATE);
     }
   }
 
-  private copyTemplates(): void {
-    const bootstrapPath = this.memoryManager.getBootstrapPath();
-    this.memoryManager.writeFile(
-      bootstrapPath,
-      BOOTSTRAP_TEMPLATE(bootstrapPath),
-    );
-    this.memoryManager.writeFile(
-      this.memoryManager.getMemoryPath(),
-      MEMORY_TEMPLATE,
-    );
-    this.memoryManager.writeFile(
-      this.memoryManager.getIdentityPath(),
-      IDENTITY_TEMPLATE,
-    );
-    this.memoryManager.writeFile(
-      this.memoryManager.getUserPath(),
-      USER_TEMPLATE,
-    );
-  }
-
+  /** 委托给 MemoryManager：判断是否需要首次引导 */
   isBootstrapNeeded(): boolean {
     return this.memoryManager.needsBootstrap();
   }

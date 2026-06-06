@@ -3,6 +3,11 @@ import * as path from "node:path";
 import * as fs from "node:fs";
 import { getMemoryDir } from "./config.js";
 
+/**
+ * 确保 memory 目录是一个 git 仓库。
+ * 如果已有 .git 或在已有仓库中则跳过；否则初始化并设置 identity。
+ * 用 git 做版本管理而非手动备份，降低数据丢失风险。
+ */
 export async function ensureGitRepo(): Promise<void> {
   const memoryDir = getMemoryDir();
   const gitDir = path.join(memoryDir, ".git");
@@ -11,6 +16,7 @@ export async function ensureGitRepo(): Promise<void> {
     return;
   }
 
+  // 检查是否已属于某个 git 仓库（例如用户自己的项目）
   try {
     const insideWorkTree = await $`git rev-parse --is-inside-work-tree`
       .cwd(memoryDir)
@@ -32,11 +38,17 @@ export async function ensureGitRepo(): Promise<void> {
   }
 }
 
+/**
+ * 执行 git add + commit。
+ * 先确保仓库存在，再检查是否有变更，没有变更则跳过提交。
+ * @param operation - 用于 commit message 的操作描述，如 "write: daily/2026-06-06.md"
+ */
 export async function gitCommit(operation: string): Promise<void> {
   const memoryDir = getMemoryDir();
 
   await ensureGitRepo();
 
+  // 处理 memory 目录是子目录的情况，找到真正的仓库根目录
   let repoRoot = memoryDir;
   try {
     const root = await $`git rev-parse --show-toplevel`
@@ -52,6 +64,7 @@ export async function gitCommit(operation: string): Promise<void> {
     await $`git add .`.cwd(repoRoot).quiet();
     const status = await $`git status --porcelain`.cwd(repoRoot).text();
 
+    // 无变更时不生成空 commit，避免干扰历史
     if (!status.trim()) {
       return;
     }

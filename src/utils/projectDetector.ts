@@ -2,6 +2,13 @@ import { execSync } from "node:child_process";
 import * as os from "node:os";
 import * as path from "node:path";
 
+/**
+ * 探测当前目录所属的项目标识。
+ * 优先从 git remote origin 获取（如 "owner/repo"），
+ * 否则 fallback 到目录名。特殊目录（home、dotfiles、memory 自身）返回 null。
+ * @param cwd - 要探测的目录路径，默认 process.cwd()
+ * @returns 项目 ID 或 null
+ */
 export function detectProject(cwd: string = process.cwd()): string | null {
   try {
     const remoteUrl = execSync("git remote get-url origin", {
@@ -25,6 +32,7 @@ export function detectProject(cwd: string = process.cwd()): string | null {
 
   if (cwd === homeDir) return null;
 
+  // 排除 memory 自身目录，避免无限递归
   const memoryDirCandidate = path.join(
     homeDir,
     ".config",
@@ -41,6 +49,10 @@ export function detectProject(cwd: string = process.cwd()): string | null {
   return basename;
 }
 
+/**
+ * 从 git remote URL 中解析出 owner/repo 格式的项目 ID。
+ * 支持 HTTPS、SSH 和 git@ 三种常见格式。
+ */
 function parseGitUrl(url: string): string | null {
   let match: RegExpMatchArray | null;
 

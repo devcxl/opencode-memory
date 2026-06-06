@@ -1,20 +1,22 @@
 import type { Plugin, PluginInput } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
-import { loadConfig } from "./config.js";
-import { MemoryManager } from "./MemoryManager.js";
-import { BootstrapManager } from "./BootstrapManager.js";
-import { detectProject } from "./projectDetector.js";
+import { loadConfig } from "./utils/config.js";
+import { MemoryManager } from "./memory/MemoryManager.js";
+import { BootstrapManager } from "./memory/BootstrapManager.js";
+import { detectProject } from "./utils/projectDetector.js";
 import {
   MEMORY_AWARENESS_INSTRUCTIONS,
   BOOTSTRAP_INSTRUCTIONS,
-} from "./memoryInstructions.js";
-import {
-  validateAction,
-  validateTarget,
-  validateContent,
-  validateTimestamp,
-} from "./validation.js";
+} from "./instructions/memoryInstructions.js";
+import { validateAction } from "./utils/validation.js";
+import { handleRead } from "./handlers/handleRead.js";
+import { handleWrite } from "./handlers/handleWrite.js";
+import { handleEdit } from "./handlers/handleEdit.js";
+import { handleDelete } from "./handlers/handleDelete.js";
+import { handleSearch } from "./handlers/handleSearch.js";
+import { handleList } from "./handlers/handleList.js";
 
+/** 追踪当前会话中的 memory 工具调用记录，用于在 session 超时时提示更新 daily log。 */
 interface SessionState {
   memoryOperations: Array<{
     action: string;
@@ -26,22 +28,22 @@ interface SessionState {
 
 const sessionStates = new Map<string, SessionState>();
 
+/**
+ * OpenCode 记忆插件入口。
+ * 通过 Plugin 接口集成到 OpenCode 事件系统与工具系统：
+ * - 在 chat.system.transform 阶段注入记忆上下文
+ * - 提供 memory 工具用于读写、编辑、删除、搜索、列出
+ * - 追踪会话状态，空闲时提示更新 daily log
+ * - 首次运行自动进入 bootstrap 引导流程
+ */
 export const MemoryPlugin: Plugin = async (ctx: PluginInput) => {
   const config = loadConfig();
   const memoryManager = new MemoryManager(config);
   const bootstrapManager = new BootstrapManager(memoryManager);
   const projectId = detectProject();
 
-  bootstrapManager.initialize();
-
-  memoryManager.ensureDirectories();
-
-  (async () => {
-    try {
-      await memoryManager.embedAllExistingFiles();
-    } catch (err) {}
-  })();
-
+  // 首次运行且存在 BOOTSTRAP.md 时优先展示引导内容，
+  // 避免同时展示引导和常规记忆导致信息过载。
   const buildContext = (pId?: string | null): string => {
     const sections: string[] = [];
     if (bootstrapManager.isBootstrapNeeded()) {
@@ -63,6 +65,7 @@ export const MemoryPlugin: Plugin = async (ctx: PluginInput) => {
     return `# Memory Context\n\n${sections.join("\n\n---\n\n")}`;
   };
 
+  // 引导阶段需要交互式问答流程，常规阶段只需要自我检查 trigger。
   const getMemoryInstructions = (): string => {
     if (bootstrapManager.isBootstrapNeeded()) {
       return BOOTSTRAP_INSTRUCTIONS;
@@ -71,6 +74,40 @@ export const MemoryPlugin: Plugin = async (ctx: PluginInput) => {
   };
 
   return {
+    config: async (cfg) => {
+      const state = memoryManager.getInitState();
+      if (state === "uninitialized") {
+        cfg.command = {
+          ...cfg.command,
+          "memory-init": {
+            description: "Initialize OpenCode memory system (first-time setup)",
+            template: [
+              "You are initializing the OpenCode memory system for the first time.",
+              "",
+              "The initialization command has already created the following files:",
+              "- BOOTSTRAP.md - First run setup instructions",
+              "- MEMORY.md - Long-term memory template",
+              "- IDENTITY.md - Agent identity template",
+              "- USER.md - User profile template",
+              "",
+              "**Your task:**",
+              "1. Read BOOTSTRAP.md to understand the setup process",
+              "2. Interactively ask the user the bootstrap questions",
+              "3. Write user responses to MEMORY.md, IDENTITY.md, USER.md using the memory tool",
+              "4. Delete BOOTSTRAP.md when setup is complete",
+              "",
+              "Be conversational and natural. Do not overwhelm with all questions at once.",
+            ].join("\n"),
+          },
+        };
+      }
+    },
+
+    "command.execute.before": async (input) => {
+      if (input.command !== "memory-init") return;
+      bootstrapManager.createInitTemplates();
+    },
+
     event: async ({ event }) => {
       const sessionID = (event as any).sessionID || (event as any).session_id;
 
@@ -242,298 +279,5 @@ export const MemoryPlugin: Plugin = async (ctx: PluginInput) => {
     },
   };
 };
-
-function handleRead(
-  params: { target?: string; date?: string; project?: string },
-  memoryManager: MemoryManager,
-): string {
-  const { target, date, project } = params;
-
-  if (!target) {
-    return handleList({}, memoryManager);
-  }
-
-  try {
-    const { filePath, displayName } = memoryManager.getPathForTarget(
-      target,
-      date,
-      project || undefined,
-    );
-    const content = memoryManager.readFile(filePath);
-    if (!content) {
-      return `${displayName} not found or empty.`;
-    }
-    return content;
-  } catch (error) {
-    return error instanceof Error ? error.message : `Unknown target: ${target}`;
-  }
-}
-
-async function handleWrite(
-  params: {
-    target?: string;
-    content?: string;
-    mode?: string;
-    date?: string;
-    project?: string;
-  },
-  memoryManager: MemoryManager,
-): Promise<string> {
-  const { target, content, mode, date, project } = params;
-
-  if (!content) {
-    return "Error: content is required for write action.";
-  }
-
-  if (!target) {
-    return "Error: target is required for write action.";
-  }
-
-  validateTarget(target);
-  validateContent(content);
-
-  if (project && target === "memory") {
-    memoryManager.ensureProjectDirs(project);
-  }
-
-  try {
-    const { filePath, displayName } = memoryManager.getPathForTarget(
-      target,
-      date,
-      project || undefined,
-    );
-
-    const timestamp = memoryManager.getLocalTimestamp();
-
-    if (mode === "overwrite") {
-      await memoryManager.writeFile(filePath, content);
-    } else {
-      memoryManager.appendFile(filePath, content);
-    }
-
-    const reflectionPrompt = [
-      "",
-      "[REFLECTION TRIGGERED]",
-      `After writing to ${displayName}, ask yourself:`,
-      "1. Why was this update important?",
-      "2. What pattern does this reveal about the user or project?",
-      "3. Should this trigger additional memory updates (cross-referencing)?",
-      "4. How does this connect to previous memories?",
-    ].join("\n");
-
-    return `${mode === "overwrite" ? "Wrote to" : "Appended to"} ${displayName}.${reflectionPrompt}\n\nTimestamp: ${timestamp}`;
-  } catch (error) {
-    return error instanceof Error ? error.message : `Unknown target: ${target}`;
-  }
-}
-
-async function handleEdit(
-  params: {
-    target?: string;
-    oldString?: string;
-    newString?: string;
-    date?: string;
-    project?: string;
-  },
-  memoryManager: MemoryManager,
-): Promise<string> {
-  const { target, oldString, newString, date, project } = params;
-
-  if (!target) {
-    return "Error: target is required for edit action.";
-  }
-
-  if (!oldString) {
-    return "Error: oldString is required for edit action.";
-  }
-
-  if (newString === undefined) {
-    return "Error: newString is required for edit action.";
-  }
-
-  try {
-    const { filePath, displayName } = memoryManager.getPathForTarget(
-      target,
-      date,
-      project || undefined,
-    );
-    await memoryManager.editFile(filePath, oldString, newString);
-    const timestamp = memoryManager.getLocalTimestamp();
-    return `Edited ${displayName}\n\nTimestamp: ${timestamp}`;
-  } catch (error) {
-    return error instanceof Error ? error.message : `Failed to edit ${target}`;
-  }
-}
-
-async function handleDelete(
-  params: {
-    target?: string;
-    timestamp?: string;
-    date?: string;
-    project?: string;
-  },
-  memoryManager: MemoryManager,
-): Promise<string> {
-  const { target, timestamp, date, project } = params;
-
-  if (!target) {
-    return "Error: target is required for delete action.";
-  }
-
-  if (!timestamp) {
-    return "Error: timestamp is required for delete action. Format: YYYY-MM-DD or YYYY-MM-DD HH:MM:SS. Use memory_list or memory_search to find exact timestamps.";
-  }
-
-  validateTarget(target);
-  validateTimestamp(timestamp);
-
-  try {
-    const result = await memoryManager.deleteByTimestamp(
-      target,
-      timestamp,
-      date,
-      project || undefined,
-    );
-    return `${result}\n\nDeleted timestamp: ${timestamp}`;
-  } catch (error) {
-    return error instanceof Error
-      ? error.message
-      : `Failed to delete from ${target}`;
-  }
-}
-
-async function handleSearch(
-  params: {
-    query?: string;
-    max_results?: number;
-    period?: string;
-    scope?: string;
-  },
-  memoryManager: MemoryManager,
-  projectId: string | null,
-): Promise<string> {
-  const { query, max_results, period, scope } = params;
-
-  if (!query) {
-    return "Error: query is required for search action.";
-  }
-
-  const effectiveProjectId =
-    scope === "project" ? projectId : scope === "global" ? null : projectId;
-
-  try {
-    const results = await memoryManager.semanticSearch(
-      query,
-      max_results ?? 20,
-      period,
-      scope === "project" ? projectId : effectiveProjectId,
-    );
-
-    if (scope === "project" && !projectId) {
-      return "No current project detected. Use --scope all or --scope global instead.";
-    }
-
-    if (results.length === 0) {
-      const periodMsg = period ? ` (filtered by period: ${period})` : "";
-      return `No results for "${query}"${periodMsg}.`;
-    }
-
-    const output = results
-      .map((r) => {
-        const ts = r.timestamp ? `[${r.timestamp}]` : "[no timestamp]";
-        const heading = r.heading ? ` (${r.heading})` : "";
-        return `${ts} ${r.filePath}${heading}:${r.score.toFixed(4)}: ${r.text.slice(0, 200)}`;
-      })
-      .join("\n\n");
-
-    const periodMsg = period ? ` (filtered by period: ${period})` : "";
-    return `Found ${results.length} results${periodMsg}:\n\n${output}`;
-  } catch (error) {
-    throw error;
-  }
-}
-
-function handleList(
-  params: { period?: string },
-  memoryManager: MemoryManager,
-): string {
-  const { period } = params;
-
-  if (period) {
-    const filesWithTimestamps = memoryManager.listFilesByPeriod(period);
-    if (filesWithTimestamps.length === 0) {
-      return `No daily logs found for period: ${period}`;
-    }
-
-    const content = filesWithTimestamps
-      .map((f) => {
-        const tsList =
-          f.timestamps.length > 0
-            ? f.timestamps.map((ts) => `    - ${ts}`).join("\n")
-            : "    (no timestamps)";
-        return `- ${f.name}:\n${tsList}`;
-      })
-      .join("\n");
-
-    return `Daily logs for ${period} (${filesWithTimestamps.length} files):\n${content}`;
-  }
-
-  const grouped = memoryManager.listFilesGroupedByMonth();
-  const parts: string[] = [];
-
-  if (
-    grouped.root.length > 0 &&
-    grouped.root.some((f) => f.timestamps.length > 0)
-  ) {
-    const rootContent = grouped.root
-      .filter((f) => f.timestamps.length > 0)
-      .map((f) => {
-        const count = f.timestamps.length;
-        const recentTs = f.timestamps.slice(0, 3);
-        const more = count > 3 ? `... and ${count - 3} more` : "";
-        const tsList = recentTs.map((ts) => `    - ${ts}`).join("\n");
-        return `- ${f.name} (${count} entries):\n${tsList}${more ? `\n    ${more}` : ""}`;
-      })
-      .join("\n");
-    parts.push(`Root files:\n${rootContent}`);
-  }
-
-  if (grouped.monthly.length > 0) {
-    const displayMonthly = grouped.monthly.slice(0, 6);
-    const moreCount = grouped.monthly.length - 6;
-
-    const monthlyContent = displayMonthly
-      .map((m) => {
-        const recentFiles = m.files.slice(0, 3);
-        const moreFiles = m.files.length - 3;
-        const filesList = recentFiles
-          .map((f) => {
-            const count = f.timestamps.length;
-            return `    - ${f.name} (${count} entries)`;
-          })
-          .join("\n");
-        const moreFilesText =
-          moreFiles > 0 ? `\n    ... and ${moreFiles} more files` : "";
-        return `- ${m.month} (${m.fileCount} files, ${m.entryCount} entries):\n${filesList}${moreFilesText}`;
-      })
-      .join("\n");
-
-    const moreText = moreCount > 0 ? `\n... and ${moreCount} more months` : "";
-    parts.push(`Daily logs by month:\n${monthlyContent}${moreText}`);
-  }
-
-  if (parts.length === 0) {
-    return "No memory files found.";
-  }
-
-  parts.push(
-    "\nUse memory_list({period: 'YYYY-MM'}) to see details for specific month.",
-  );
-  parts.push(
-    "Use memory_list({period: 'YYYY'}) to see all daily logs for specific year.",
-  );
-
-  return parts.join("\n");
-}
 
 export default MemoryPlugin;
