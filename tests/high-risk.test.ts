@@ -10,7 +10,8 @@ const upsertCalls: Array<{ filePath: string; chunks: any[] }> = [];
 const projectStoreBasePaths: string[] = [];
 const semanticSearchCalls: number[] = [];
 let semanticResults: any[] = [];
-let configMemoryDir = "";
+let currentModelId = "mock-embedding-model";
+let currentDtype = "fp32";
 
 mock.module("../src/search/embedding.js", () => ({
   embedText: async (text: string) => {
@@ -18,6 +19,8 @@ mock.module("../src/search/embedding.js", () => ({
     return [Math.max(text.length, 1)];
   },
   getEmbedder: async () => ({}),
+  getCurrentDtype: () => currentDtype,
+  getCurrentModelId: () => currentModelId,
   initEmbedder: async () => {},
   isInitialized: async () => true,
 }));
@@ -27,6 +30,25 @@ mock.module("../src/search/vector-store.js", () => ({
     upsertCalls.push({ filePath, chunks });
   },
   deleteFileVectors: async () => {},
+  isCurrentEmbeddingMetadata: (metadata: Record<string, unknown> | undefined) =>
+    String(metadata?.embeddingModel) === currentModelId &&
+    String(metadata?.embeddingDtype) === currentDtype,
+  filterCurrentSearchResults: (items: any[]) =>
+    items
+      .filter(
+        (item) =>
+          String(item.item.metadata.embeddingModel) === currentModelId &&
+          String(item.item.metadata.embeddingDtype) === currentDtype,
+      )
+      .map((item) => ({
+        score: item.score,
+        filePath: String(item.item.metadata.filePath),
+        heading: String(item.item.metadata.heading),
+        text: String(item.item.metadata.text),
+        timestamp: item.item.metadata.timestamp
+          ? String(item.item.metadata.timestamp)
+          : undefined,
+      })),
   semanticSearch: async (_queryVector: number[], topK: number) => {
     semanticSearchCalls.push(topK);
     return Number.isFinite(topK) ? semanticResults.slice(0, topK) : semanticResults;
@@ -68,12 +90,6 @@ mock.module("../src/utils/projectDetector.js", () => ({
   detectProject: () => "owner/repo",
 }));
 
-mock.module("../src/utils/config.js", () => ({
-  ensureDir: (dir: string) => fs.mkdirSync(dir, { recursive: true }),
-  getMemoryDir: () => configMemoryDir,
-  loadConfig: () => ({ memoryDir: configMemoryDir }),
-}));
-
 const { MemoryManager } = await import("../src/memory/MemoryManager.js");
 const { FileSearcher } = await import("../src/memory/FileSearcher.js");
 const { handleWrite } = await import("../src/handlers/handleWrite.js");
@@ -87,7 +103,8 @@ beforeEach(() => {
   projectStoreBasePaths.length = 0;
   semanticSearchCalls.length = 0;
   semanticResults = [];
-  configMemoryDir = "";
+  currentModelId = "mock-embedding-model";
+  currentDtype = "fp32";
 });
 
 function makeTempHome(): { homeDir: string; memoryDir: string } {
@@ -139,6 +156,35 @@ test("append write indexes the newly written daily content", async () => {
       expect(upsertCalls[0].chunks[0].metadata.text).toContain(
         "unique append searchable content",
       );
+    });
+  } finally {
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  }
+});
+
+test("indexed chunks include the current embedding model", async () => {
+  const { homeDir, memoryDir } = makeTempHome();
+
+  try {
+    await withHome(homeDir, async () => {
+      currentModelId = "test-model";
+      currentDtype = "q8";
+      const manager = new MemoryManager({ memoryDir });
+      manager.ensureDirectories();
+
+      await handleWrite(
+        {
+          target: "daily",
+          date: "2026-06-06",
+          content: "## Entry\nmodel metadata content",
+        },
+        manager,
+      );
+
+      expect(upsertCalls[0].chunks[0].metadata.embeddingModel).toBe(
+        "test-model",
+      );
+      expect(upsertCalls[0].chunks[0].metadata.embeddingDtype).toBe("q8");
     });
   } finally {
     fs.rmSync(homeDir, { recursive: true, force: true });
@@ -298,7 +344,6 @@ test("memory tool writes default to the detected project when project is omitted
 
   try {
     await withHome(homeDir, async () => {
-      configMemoryDir = memoryDir;
       const hooks = await MemoryPlugin({} as any);
 
       await hooks.tool!.memory.execute({
@@ -322,7 +367,6 @@ test("memory tool reads default to the detected project when project is omitted"
 
   try {
     await withHome(homeDir, async () => {
-      configMemoryDir = memoryDir;
       const projectMemoryPath = path.join(
         memoryDir,
         "projects",
