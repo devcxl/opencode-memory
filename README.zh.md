@@ -1,5 +1,12 @@
 # @devcxl/opencode-memory
 
+[![npm version](https://img.shields.io/npm/v/@devcxl/opencode-memory)](https://www.npmjs.com/package/@devcxl/opencode-memory)
+[![npm downloads](https://img.shields.io/npm/dm/@devcxl/opencode-memory)](https://www.npmjs.com/package/@devcxl/opencode-memory)
+[![license](https://img.shields.io/npm/l/@devcxl/opencode-memory)](./LICENSE)
+[![CI](https://img.shields.io/github/actions/workflow/status/devcxl/opencode-memory/ci.yml?branch=main)](https://github.com/devcxl/opencode-memory/actions)
+
+[English](./README.md) | [中文](./README.zh.md)
+
 基于 Markdown 的 OpenCode 简易记忆插件。
 
 ## 安装
