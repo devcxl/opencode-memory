@@ -1,4 +1,4 @@
-# @zhafron/opencode-memory-md
+# @devcxl/opencode-memory
 
 Simple markdown-based memory plugin for OpenCode.
 
@@ -8,7 +8,7 @@ Add to your OpenCode configuration at `~/.config/opencode/opencode.json`:
 
 ```json
 {
-  "plugin": ["@zhafron/opencode-memory-md"]
+  "plugin": ["@devcxl/opencode-memory"]
 }
 ```
 
@@ -33,22 +33,26 @@ Add to your OpenCode configuration at `~/.config/opencode/opencode.json`:
 
 | Action | Description | Parameters |
 |--------|-------------|------------|
-| `read` | Read memory file | `target`: memory, identity, user, daily |
-| `write` | Write to memory file | `target`, `content`, `mode`: append/overwrite |
-| `edit` | Edit specific part of file (not daily) | `target`, `oldString`, `newString` |
-| `search` | Search memory files | `query`, `max_results` (optional) |
-| `list` | List all files | - |
+| `read` | Read memory file | `target`: memory, identity, user, daily; `date`, `project` (optional) |
+| `write` | Write to memory file | `target`, `content`, `mode`: append/overwrite; `date`, `project` (optional) |
+| `edit` | Edit specific part of file | `target`, `oldString`, `newString`; `date`, `project` (optional) |
+| `delete` | Delete entry by timestamp | `target`, `timestamp`; `date`, `project` (optional) |
+| `search` | Semantic search memory files | `query`, `max_results`, `period`, `scope` (optional) |
+| `list` | List memory files | `period` (optional) |
 
 **Examples:**
 
 ```bash
 memory --action read --target memory
 memory --action write --target memory --content "Remember to use PostgreSQL for all projects"
-memory --action write --target identity --content "- **Name**: Jarvis" --mode overwrite
 memory --action write --target daily --content "Fixed critical bug in auth module"
 memory --action edit --target memory --oldString "Project: Auth Service" --newString "Project: Payment Service"
+memory --action delete --target daily --timestamp "2026-06-06 15:40:23"
 memory --action search --query "PostgreSQL"
+memory --action search --query "bug" --period 2026-06 --scope project
 memory --action list
+memory --action list --period 2026-06
+memory --action write --target memory --project my-project --content "Use port 5432"
 ```
 
 ## First Run Flow
@@ -61,6 +65,8 @@ memory --action list
 4. AI writes to MEMORY.md, IDENTITY.md, USER.md
 5. AI deletes BOOTSTRAP.md
 6. Setup complete
+
+The setup can be triggered manually with `/memory-init` at any time (only available when the memory system is not yet fully initialized).
 
 ## Context Injection
 

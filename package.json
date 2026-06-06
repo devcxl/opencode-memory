@@ -8,6 +8,7 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
+    "test": "bun test",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write \"src/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\"",
