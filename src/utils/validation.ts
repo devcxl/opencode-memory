@@ -75,3 +75,31 @@ export function validateScope(scope: string): void {
     );
   }
 }
+
+/** 校验项目 ID 只能是安全的相对路径，如 owner/repo */
+export function validateProjectId(projectId: string): void {
+  if (!projectId || projectId.trim() !== projectId) {
+    throw new Error("Invalid project id: must be a non-empty string");
+  }
+
+  if (
+    projectId.startsWith("/") ||
+    projectId.includes("\\") ||
+    /^[A-Za-z]:/.test(projectId)
+  ) {
+    throw new Error("Invalid project id: absolute paths are not allowed");
+  }
+
+  const segments = projectId.split("/");
+  if (
+    segments.some((segment) => !segment || segment === "." || segment === "..")
+  ) {
+    throw new Error("Invalid project id: path traversal is not allowed");
+  }
+
+  if (!/^[A-Za-z0-9._/-]+$/.test(projectId)) {
+    throw new Error(
+      "Invalid project id: only letters, numbers, '.', '_', '-', and '/' are allowed",
+    );
+  }
+}

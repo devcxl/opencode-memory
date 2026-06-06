@@ -7,7 +7,10 @@ import type {
   MonthGroup,
 } from "../types.js";
 import { embedText } from "../search/embedding.js";
-import { extractTimestamps } from "../utils/timestampParser.js";
+import {
+  extractTimestamps,
+  parseContentByTimestamp,
+} from "../utils/timestampParser.js";
 import type { ProjectStore } from "../search/vector-store.js";
 
 /** 封装对 memory 文件的搜索和列举逻辑，支持关键词搜索、语义搜索、列表分组 */
@@ -76,31 +79,29 @@ export class FileSearcher {
   ): Promise<SemanticSearchResult[]> {
     const queryVector = await embedText(query);
     const module = await import("../search/vector-store.js");
-    const results = await module.semanticSearch(queryVector, maxResults);
+    const searchLimit = period ? Number.POSITIVE_INFINITY : maxResults;
+    const results = await module.semanticSearch(queryVector, searchLimit);
 
     if (projectId) {
       const store = this.getProjectStore(projectId);
       try {
-        const projectResults = await store.search(queryVector, maxResults);
+        const projectResults = await store.search(queryVector, searchLimit);
         results.push(...projectResults);
         results.sort((a, b) => b.score - a.score);
       } catch {}
     }
 
     const resultsWithTimestamp: SemanticSearchResult[] = [];
-    for (const result of results.slice(0, maxResults)) {
+    for (const result of results) {
       const fileContent = this.readFile(result.filePath);
-      let timestamp: string | undefined;
+      let timestamp = result.timestamp;
 
       if (fileContent) {
-        const timestamps = extractTimestamps(fileContent);
-        if (timestamps.length > 0) {
-          timestamp = timestamps[0];
-        }
+        timestamp ??= this.findTimestampForResult(fileContent, result.text);
       }
 
       if (period) {
-        if (timestamp && !timestamp.startsWith(period.replace("-", "-"))) {
+        if (!timestamp || !timestamp.startsWith(period)) {
           continue;
         }
       }
@@ -109,9 +110,27 @@ export class FileSearcher {
         ...result,
         timestamp,
       });
+
+      if (resultsWithTimestamp.length >= maxResults) {
+        break;
+      }
     }
 
     return resultsWithTimestamp;
+  }
+
+  private findTimestampForResult(
+    fileContent: string,
+    resultText: string,
+  ): string | undefined {
+    const entries = parseContentByTimestamp(fileContent);
+    const matchedEntry = entries.find((entry) =>
+      entry.content.includes(resultText),
+    );
+    if (matchedEntry) return matchedEntry.timestamp;
+
+    const timestamps = extractTimestamps(fileContent);
+    return timestamps.length === 1 ? timestamps[0] : undefined;
   }
 
   /** 列出根目录和 daily 目录下的所有 md 文件，daily 按倒序排列 */

@@ -33,6 +33,15 @@ async function getDailyIndex(): Promise<LocalIndex> {
   return dailyIndex;
 }
 
+async function getQueryLimit(index: LocalIndex, topK: number): Promise<number> {
+  if (Number.isFinite(topK)) {
+    return topK;
+  }
+
+  const items = await index.listItems();
+  return Math.max(items.length, 1);
+}
+
 /**
  * 已向量化的文本切片，包含嵌入向量及其元数据。
  * metadata 中预期包含 filePath、heading、text、hash 等字段。
@@ -106,6 +115,8 @@ export interface SearchResult {
   heading: string;
   /** 切片正文 */
   text: string;
+  /** 切片所属时间戳 */
+  timestamp?: string;
 }
 
 /**
@@ -123,10 +134,14 @@ export async function semanticSearch(
 
   const rootIdx = await getRootIndex();
   const dailyIdx = await getDailyIndex();
+  const [rootTopK, dailyTopK] = await Promise.all([
+    getQueryLimit(rootIdx, topK),
+    getQueryLimit(dailyIdx, topK),
+  ]);
 
   const [rootResults, dailyResults] = await Promise.all([
-    rootIdx.queryItems(queryVector, "", topK),
-    dailyIdx.queryItems(queryVector, "", topK),
+    rootIdx.queryItems(queryVector, "", rootTopK),
+    dailyIdx.queryItems(queryVector, "", dailyTopK),
   ]);
 
   for (const item of rootResults) {
@@ -135,6 +150,9 @@ export async function semanticSearch(
       filePath: String(item.item.metadata.filePath),
       heading: String(item.item.metadata.heading),
       text: String(item.item.metadata.text),
+      timestamp: item.item.metadata.timestamp
+        ? String(item.item.metadata.timestamp)
+        : undefined,
     });
   }
 
@@ -144,6 +162,9 @@ export async function semanticSearch(
       filePath: String(item.item.metadata.filePath),
       heading: String(item.item.metadata.heading),
       text: String(item.item.metadata.text),
+      timestamp: item.item.metadata.timestamp
+        ? String(item.item.metadata.timestamp)
+        : undefined,
     });
   }
 
@@ -270,12 +291,16 @@ export class ProjectStore {
    */
   async search(queryVector: number[], topK: number): Promise<SearchResult[]> {
     const index = await this.getIndex();
-    const items = await index.queryItems(queryVector, "", topK);
+    const limit = await getQueryLimit(index, topK);
+    const items = await index.queryItems(queryVector, "", limit);
     return items.map((item) => ({
       score: item.score,
       filePath: String(item.item.metadata.filePath),
       heading: String(item.item.metadata.heading),
       text: String(item.item.metadata.text),
+      timestamp: item.item.metadata.timestamp
+        ? String(item.item.metadata.timestamp)
+        : undefined,
     }));
   }
 

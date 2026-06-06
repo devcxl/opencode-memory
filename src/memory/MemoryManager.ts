@@ -11,7 +11,7 @@ import type {
 } from "../types.js";
 import { ensureDir, getMemoryDir } from "../utils/config.js";
 import { atomicWrite } from "../utils/atomicWrite.js";
-import { checkLineLimit } from "../utils/validation.js";
+import { checkLineLimit, validateProjectId } from "../utils/validation.js";
 import { gitCommit } from "../utils/git.js";
 import { embedText } from "../search/embedding.js";
 import { chunkMarkdown } from "../search/chunker.js";
@@ -83,6 +83,7 @@ export class MemoryManager {
    * 使用延迟初始化，只在首次访问时创建 ProjectStore
    */
   getProjectStore(projectId: string): ProjectStore {
+    validateProjectId(projectId);
     if (!this.projectStores.has(projectId)) {
       this.projectStores.set(
         projectId,
@@ -96,6 +97,7 @@ export class MemoryManager {
 
   /** 获取项目目录路径 */
   getProjectDir(projectId: string): string {
+    validateProjectId(projectId);
     return path.join(this.config.memoryDir, "projects", projectId);
   }
 
@@ -172,7 +174,11 @@ export class MemoryManager {
     checkLineLimit(filePath, content);
     atomicWrite(filePath, content);
     await this.embedAndIndex(filePath, content);
-    await gitCommit(`Update ${path.basename(filePath)}`);
+    await gitCommit(
+      `Update ${path.basename(filePath)}`,
+      filePath,
+      this.config.memoryDir,
+    );
   }
 
   /**
@@ -203,7 +209,11 @@ export class MemoryManager {
     const updatedContent = content.replace(oldString, newString);
     atomicWrite(filePath, updatedContent);
     await this.embedAndIndex(filePath, updatedContent);
-    await gitCommit(`Edit ${path.basename(filePath)}`);
+    await gitCommit(
+      `Edit ${path.basename(filePath)}`,
+      filePath,
+      this.config.memoryDir,
+    );
   }
 
   /**
@@ -243,16 +253,20 @@ export class MemoryManager {
 
     atomicWrite(filePath, newContent);
     await this.embedAndIndex(filePath, newContent);
-    await gitCommit(`Delete entries from ${path.basename(filePath)}`);
+    await gitCommit(
+      `Delete entries from ${path.basename(filePath)}`,
+      filePath,
+      this.config.memoryDir,
+    );
 
     return `Deleted ${entries.length - filteredEntries.length} entries from ${displayName}`;
   }
 
   /**
    * 以追加方式写入文件，自动添加时间戳标记
-   * 用于 daily log 等持续追加的场景，不触发向量索引的异步等待
+   * 用于 daily log 等持续追加的场景，并保持向量索引与 git 提交一致
    */
-  appendFile(filePath: string, content: string): void {
+  async appendFile(filePath: string, content: string): Promise<void> {
     const existing = this.readFile(filePath);
     const separator = existing?.trim() ? "\n\n" : "";
     const timestamp = this.getLocalTimestamp();
@@ -261,7 +275,12 @@ export class MemoryManager {
 
     checkLineLimit(filePath, newContent);
     atomicWrite(filePath, newContent);
-    gitCommit(`Append to ${path.basename(filePath)}`);
+    await this.embedAndIndex(filePath, newContent);
+    await gitCommit(
+      `Append to ${path.basename(filePath)}`,
+      filePath,
+      this.config.memoryDir,
+    );
   }
 
   /**
@@ -292,6 +311,7 @@ export class MemoryManager {
             heading: chunk.heading,
             text: chunk.text,
             hash: chunk.hash,
+            ...(chunk.timestamp ? { timestamp: chunk.timestamp } : {}),
           },
         })),
       );
@@ -299,8 +319,8 @@ export class MemoryManager {
       const projectsDir = path.join(this.config.memoryDir, "projects");
       if (filePath.startsWith(projectsDir + path.sep)) {
         const relative = path.relative(projectsDir, filePath);
-        const projectId = relative.split(path.sep)[0];
-        if (projectId) {
+        const projectId = path.dirname(relative).split(path.sep).join("/");
+        if (projectId && projectId !== ".") {
           const store = this.getProjectStore(projectId);
           await store.upsertFile(filePath, embedded);
           return;

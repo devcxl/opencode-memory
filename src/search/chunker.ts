@@ -17,6 +17,8 @@ export interface Chunk {
   filePath: string;
   /** 基于 filePath + heading + text 计算的 SHA256 哈希，用于增量去重 */
   hash: string;
+  /** 条目对应的时间戳，来自最近的 <!-- timestamp --> 标记 */
+  timestamp?: string;
 }
 
 /**
@@ -32,37 +34,48 @@ export interface Chunk {
  */
 export function chunkMarkdown(content: string, filePath: string): Chunk[] {
   const chunks: Chunk[] = [];
-  const headingRegex = /^(#{2,3})\s+(.+)$/gm;
-  const sections = content.split(headingRegex);
-
+  const headingRegex = /^(#{2,3})\s+(.+)$/;
+  const timestampRegex =
+    /^<!--\s*(\d{4}-\d{2}-\d{2}(?:\s+\d{2}:\d{2}:\d{2})?)\s*-->$/;
   let currentHeading = "";
-  for (let i = 0; i < sections.length; i += 3) {
-    const heading = sections[i + 1];
-    const text = sections[i + 2];
+  let currentTimestamp: string | undefined;
+  let buffer: string[] = [];
 
-    if (heading) {
-      currentHeading = heading.trim();
-    }
+  const flush = () => {
+    const text = buffer.join("\n").trim();
+    if (!text) return;
 
-    if (text && text.trim()) {
-      chunks.push({
-        text: text.trim(),
-        heading: currentHeading,
-        filePath,
-        hash: hashContent(`${filePath}:${currentHeading}:${text.trim()}`),
-      });
-    }
-  }
-
-  // 兜底：没有任何标题匹配时，将全文作为一个切片
-  if (chunks.length === 0 && content.trim()) {
     chunks.push({
-      text: content.trim(),
-      heading: "",
+      text,
+      heading: currentHeading,
       filePath,
-      hash: hashContent(`${filePath}:${content.trim()}`),
+      hash: hashContent(
+        `${filePath}:${currentHeading}:${currentTimestamp ?? ""}:${text}`,
+      ),
+      ...(currentTimestamp ? { timestamp: currentTimestamp } : {}),
     });
+    buffer = [];
+  };
+
+  for (const line of content.split("\n")) {
+    const timestampMatch = line.match(timestampRegex);
+    if (timestampMatch) {
+      flush();
+      currentTimestamp = timestampMatch[1];
+      continue;
+    }
+
+    const headingMatch = line.match(headingRegex);
+    if (headingMatch) {
+      flush();
+      currentHeading = headingMatch[2].trim();
+      continue;
+    }
+
+    buffer.push(line);
   }
+
+  flush();
 
   return chunks;
 }

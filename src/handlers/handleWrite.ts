@@ -49,7 +49,7 @@ export async function handleWrite(
     if (mode === "overwrite") {
       await memoryManager.writeFile(filePath, content);
     } else {
-      memoryManager.appendFile(filePath, content);
+      await memoryManager.appendFile(filePath, content);
     }
 
     const reflectionPrompt = [
