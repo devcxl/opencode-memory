@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import * as fs from "node:fs";
 import { isInitTemplateContent } from "./templates.js";
+import { readFileSafe } from "../utils/fs.js";
 
 /** 检查 memory 系统的初始化状态，区分未初始化/引导中/就绪三种状态 */
 export class StateChecker {
@@ -69,10 +70,6 @@ export class StateChecker {
 
   /** 安全读取文件内容，文件不存在返回 null */
   private readContent(filePath: string): string | null {
-    try {
-      return fs.readFileSync(filePath, "utf-8");
-    } catch {
-      return null;
-    }
+    return readFileSafe(filePath);
   }
 }
