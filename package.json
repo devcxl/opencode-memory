@@ -6,7 +6,7 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && cp src/instructions/*.md dist/instructions/",
     "dev": "tsc --watch",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
