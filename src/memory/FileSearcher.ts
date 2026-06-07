@@ -147,6 +147,12 @@ export class FileSearcher {
     return timestamps.length === 1 ? timestamps[0] : undefined;
   }
 
+  /** 读取文件并提取时间戳列表 */
+  private getTimestamps(dir: string, file: string): string[] {
+    const content = this.readFile(path.join(dir, file));
+    return content ? extractTimestamps(content) : [];
+  }
+
   /** 列出根目录和 daily 目录下的所有 md 文件，daily 按倒序排列 */
   listFiles(): ListResult {
     const root: string[] = [];
@@ -185,9 +191,7 @@ export class FileSearcher {
     const { root, daily } = this.listFiles();
 
     for (const file of root) {
-      const filePath = path.join(this.memoryDir, file);
-      const content = this.readFile(filePath);
-      const timestamps = content ? extractTimestamps(content) : [];
+      const timestamps = this.getTimestamps(this.memoryDir, file);
       result.push({ name: file, timestamps });
     }
 
@@ -195,9 +199,7 @@ export class FileSearcher {
     const moreCount = daily.length - limit;
 
     for (const file of recentDaily) {
-      const filePath = path.join(this.dailyDir, file);
-      const content = this.readFile(filePath);
-      const timestamps = content ? extractTimestamps(content) : [];
+      const timestamps = this.getTimestamps(this.dailyDir, file);
       result.push({ name: `daily/${file}`, timestamps });
     }
 
@@ -223,9 +225,7 @@ export class FileSearcher {
 
     const rootFiles: Array<{ name: string; timestamps: string[] }> = [];
     for (const file of root) {
-      const filePath = path.join(this.memoryDir, file);
-      const content = this.readFile(filePath);
-      const timestamps = content ? extractTimestamps(content) : [];
+      const timestamps = this.getTimestamps(this.memoryDir, file);
       rootFiles.push({ name: file, timestamps });
     }
 
@@ -237,9 +237,7 @@ export class FileSearcher {
     for (const file of daily) {
       const dateStr = file.replace(".md", "");
       const month = dateStr.slice(0, 7);
-      const filePath = path.join(this.dailyDir, file);
-      const content = this.readFile(filePath);
-      const timestamps = content ? extractTimestamps(content) : [];
+      const timestamps = this.getTimestamps(this.dailyDir, file);
 
       if (!monthlyMap.has(month)) {
         monthlyMap.set(month, []);
@@ -285,9 +283,7 @@ export class FileSearcher {
     });
 
     for (const file of filteredDaily) {
-      const filePath = path.join(this.dailyDir, file);
-      const content = this.readFile(filePath);
-      const timestamps = content ? extractTimestamps(content) : [];
+      const timestamps = this.getTimestamps(this.dailyDir, file);
       result.push({ name: `daily/${file}`, timestamps });
     }
 
