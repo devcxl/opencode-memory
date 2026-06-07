@@ -320,8 +320,15 @@ export class MemoryManager {
   }
 
   /**
-   * 将文件内容分块、向量化并写入向量存储，供语义搜索使用
-   * 项目文件写入项目级 store，其余写入全局 store；静默跳过未初始化的引擎
+   * 将文件内容分块、向量化并写入向量存储，供语义搜索使用。
+   *
+   * 路由规则：
+   * - 文件路径位于 projects/ 子目录下 → 写入对应 project 的 ProjectStore
+   * - 文件名称包含 daily → 写入全局 daily 索引
+   * - 其余文件 → 写入全局 root 索引
+   *
+   * 静默跳过 embedding 引擎未初始化的错误（如插件刚安装尚未下载模型），
+   * 因为此时写入不影响数据持久性，后续模型加载后会重建索引。
    */
   private async embedAndIndex(
     filePath: string,
@@ -331,6 +338,7 @@ export class MemoryManager {
       const chunks = chunkMarkdown(content, filePath);
       const embeddingModel = getCurrentModelId();
       const embeddingDtype = getCurrentDtype();
+      // 并行嵌入所有切片，减少 embedding 等待时间
       const embedded = await Promise.all(
         chunks.map(async (chunk) => ({
           vector: await embedText(chunk.text),
@@ -347,8 +355,10 @@ export class MemoryManager {
       );
 
       const projectsDir = this.paths.projectsDir;
+      // 判断是否属于项目文件：路径以 projects/ 开头
       if (filePath.startsWith(projectsDir + path.sep)) {
         const relative = path.relative(projectsDir, filePath);
+        // projectId 取 projects/ 后的第一级目录名
         const projectId = path.dirname(relative).split(path.sep).join("/");
         if (projectId && projectId !== ".") {
           const store = this.getProjectStore(projectId);
@@ -357,9 +367,11 @@ export class MemoryManager {
         }
       }
 
+      // 非项目文件写入全局索引（root/daily 由 upsertFile 内部按路径区分）
       await upsertFile(filePath, embedded);
     } catch (err) {
       const errMsg = (err as Error).message;
+      // embedding 引擎未初始化时静默跳过，不阻塞写入操作
       if (!errMsg.includes("not initialized")) {
         throw err;
       }

@@ -11,6 +11,7 @@ import {
 
 // ─── 缓存管理 ────────────────────────────────────────────────
 
+/** Transformers 库的模型缓存路径，存储在 node_modules 中 */
 function getModelCachePath(): string {
   const pluginDir = path.dirname(path.dirname(__dirname));
   return path.join(
@@ -22,6 +23,12 @@ function getModelCachePath(): string {
   );
 }
 
+/**
+ * 检查模型缓存是否有效。
+ * 判断标准：
+ * - onnx 模型文件存在
+ * - 文件大小 > 1MB（排除下载不完整/损坏的模型）
+ */
 function isModelCacheValid(): boolean {
   const cachePath = getModelCachePath();
   const modelPath = path.join(
@@ -44,6 +51,7 @@ function isModelCacheValid(): boolean {
   return true;
 }
 
+/** 清空模型缓存子目录，用于强制重新下载 */
 function clearModelCache(): void {
   try {
     const cachePath = getModelCachePath();
@@ -62,8 +70,8 @@ let initPromise: Promise<void> | null = null;
 
 /**
  * 初始化嵌入模型 pipeline。
- * 使用单例模式确保模型只加载一次，首次调用前检查缓存有效性，
- * 若模型文件损坏则自动清缓存重试。
+ * 使用 Promise 锁实现单例模式，确保并发调用只加载一次模型。
+ * 首次加载前检查缓存有效性，若模型文件损坏则自动清缓存重试（最多 2 次）。
  */
 export async function initEmbedder(): Promise<void> {
   if (!initPromise) {
@@ -83,6 +91,7 @@ export async function initEmbedder(): Promise<void> {
           return;
         } catch (err) {
           const errMsg = (err as Error).message;
+          // 仅对模型损坏错误（protobuf 解析失败、corrupt）重试，其余直接抛
           if (
             errMsg.includes("Protobuf parsing failed") ||
             errMsg.includes("corrupt")

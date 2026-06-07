@@ -42,6 +42,12 @@ export async function ensureGitRepo(
 /**
  * 执行 git add + commit。
  * 先确保仓库存在，再检查是否有变更，没有变更则跳过提交。
+ *
+ * 路径安全：
+ * - 先找到真正的 repo root（支持 memory 目录为现有仓库子目录的场景）
+ * - 校验相对路径不超出 repo 根目录（防止路径穿越）
+ * - 仅对具体文件路径 add + commit，避免意外提交整个目录
+ *
  * @param operation - 用于 commit message 的操作描述，如 "write: daily/2026-06-06.md"
  */
 export async function gitCommit(
@@ -51,7 +57,7 @@ export async function gitCommit(
 ): Promise<void> {
   await ensureGitRepo(memoryDir);
 
-  // 处理 memory 目录是子目录的情况，找到真正的仓库根目录
+  // 找到真正的仓库根目录（memory 目录可能属于另一个 git 仓库的子目录）
   let repoRoot = memoryDir;
   try {
     const root = await $`git rev-parse --show-toplevel`
@@ -65,6 +71,7 @@ export async function gitCommit(
 
   try {
     const relativePath = path.relative(repoRoot, filePath);
+    // 路径穿越检查：相对路径不能以 .. 开头或为绝对路径
     if (
       relativePath === ".." ||
       relativePath.startsWith(`..${path.sep}`) ||

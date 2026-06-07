@@ -53,6 +53,15 @@ export const MODEL_PRESETS: Record<string, EmbeddingModelConfig> = {
 
 // ─── 模型选择策略 ────────────────────────────────────────────
 
+/**
+ * 按优先级链解析嵌入模型：
+ * L1: opencode.json 插件配置（最高优先级，用户显式设置）
+ * L2: 系统 locale 自动检测（zh → jina 中文模型）
+ * L3: OPM_EMBEDDING_MODEL 环境变量（部署环境覆盖）
+ * L4: 默认（nomic-embed-text-v1.5）
+ *
+ * 每层 fallback 时输出 debug log，方便排查实际用的哪个模型。
+ */
 export function resolveModel(
   getPluginConfig: (key: string) => string | undefined,
   zhLocale: boolean,
@@ -96,7 +105,7 @@ export function resolveModel(
     );
   }
 
-  // 默认
+  // L4: 默认
   const preset = MODEL_PRESETS["nomic-embed-text-v1.5"];
   debugLog(
     `[opencode-memory] Using embedding model: ${preset.modelId} (default)`,
@@ -104,6 +113,14 @@ export function resolveModel(
   return preset;
 }
 
+/**
+ * 按优先级链解析 embedding dtype：
+ * L1: opencode.json 插件配置的 dtype 字段
+ * L2: OPM_EMBEDDING_DTYPE 环境变量
+ * L3: 默认 "fp32"
+ *
+ * 仅在值属于 VALID_DTYPES 集合时才采纳，避免错误的配置导致模型加载失败。
+ */
 export function resolveDtype(
   getPluginConfig: (key: string) => string | undefined,
 ): QuantizationDtype {
@@ -135,6 +152,7 @@ export function resolveDtype(
     );
   }
 
+  // L3: 默认 fp32（对多数 ONNX 模型最兼容）
   return "fp32";
 }
 

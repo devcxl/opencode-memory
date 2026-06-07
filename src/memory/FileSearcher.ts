@@ -68,8 +68,13 @@ export class FileSearcher {
   }
 
   /**
-   * 语义搜索：基于向量相似度匹配，支持按时段和项目筛选
-   * 对结果附加时间戳用于后续的 period 过滤
+   * 语义搜索：基于向量相似度匹配，支持按时段和项目筛选。
+   *
+   * 搜索策略：
+   * 1. 先按语义向量获取全局索引的搜索结果
+   * 2. 若指定了 projectId，追加项目级索引的结果并合并排序
+   * 3. 为每个结果附加时间戳（用于 period 过滤和展示）
+   * 4. period 过滤为宽松前缀匹配（"YYYY-MM" 或 "YYYY"），在向量检索后执行
    */
   async semanticSearch(
     query: string,
@@ -79,9 +84,11 @@ export class FileSearcher {
   ): Promise<SemanticSearchResult[]> {
     const queryVector = await embedText(query);
     const module = await import("../search/vector-store.js");
+    // period 过滤时先取全部结果（或超大上限），在内存中过滤
     const searchLimit = period ? Number.POSITIVE_INFINITY : maxResults;
     const results = await module.semanticSearch(queryVector, searchLimit);
 
+    // 项目搜索：在项目 store 中独立搜索后与全局合并
     if (projectId) {
       const store = this.getProjectStore(projectId);
       try {
@@ -96,10 +103,12 @@ export class FileSearcher {
       const fileContent = this.readFile(result.filePath);
       let timestamp = result.timestamp;
 
+      // 若索引中无时间戳，尝试从文件内容中推断
       if (fileContent) {
         timestamp ??= this.findTimestampForResult(fileContent, result.text);
       }
 
+      // period 过滤：仅保留 timestamp 前缀匹配的结果
       if (period) {
         if (!timestamp || !timestamp.startsWith(period)) {
           continue;

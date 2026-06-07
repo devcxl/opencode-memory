@@ -17,21 +17,25 @@ import { handleSearch } from "./handlers/handleSearch.js";
 import { handleList } from "./handlers/handleList.js";
 import { applyDefaultProject } from "./utils/defaultProject.js";
 
-/** 追踪当前会话中的 memory 工具调用记录，用于在 session 超时时提示更新 daily log。 */
+/** 追踪当前会话中 memory 工具调用记录，用于空闲时提示更新 daily log */
 interface SessionState {
+  /** 本会话所有 memory 操作记录，按时间排序 */
   memoryOperations: Array<{
     action: string;
     target: string;
     timestamp: string;
   }>;
+  /** 最近一次 daily 更新的 ISO 时间戳，null 表示未更新过 */
   lastDailyUpdate: string | null;
 }
 
+/** memory 工具调用参数中需要的字段 */
 interface MemoryCallArgs {
   action?: string;
   target?: string;
 }
 
+/** sessionID → 会话状态映射，随 session 生命周期管理 */
 const sessionStates = new Map<string, SessionState>();
 
 /**
@@ -48,8 +52,8 @@ export const MemoryPlugin: Plugin = async (ctx: PluginInput) => {
   const bootstrapManager = new BootstrapManager(memoryManager);
   const projectId = detectProject();
 
-  // 首次运行且存在 BOOTSTRAP.md 时优先展示引导内容，
-  // 避免同时展示引导和常规记忆导致信息过载。
+  // 引导阶段优先展示 BOOTSTRAP.md，避免同时展示引导和常规记忆造成信息过载。
+  // 常规阶段按 MEMORY > IDENTITY > USER > PROJECT 顺序注入上下文文件。
   const buildContext = (pId?: string | null): string => {
     const sections: string[] = [];
     if (bootstrapManager.isBootstrapNeeded()) {
@@ -71,7 +75,8 @@ export const MemoryPlugin: Plugin = async (ctx: PluginInput) => {
     return `# Memory Context\n\n${sections.join("\n\n---\n\n")}`;
   };
 
-  // 引导阶段需要交互式问答流程，常规阶段只需要自我检查 trigger。
+  // 引导阶段使用静态指令，常规阶段使用含 {today} 的动态指令。
+  // 静态指令不需要日期替换（引导过程可能跨天），动态指令需要今天日期。
   const getMemoryInstructions = (): string => {
     if (bootstrapManager.isBootstrapNeeded()) {
       return BOOTSTRAP_INSTRUCTIONS;
@@ -112,10 +117,12 @@ export const MemoryPlugin: Plugin = async (ctx: PluginInput) => {
     "command.execute.before": async (input) => {
       if (input.command !== "memory-init") return;
       if (memoryManager.getInitState() === "ready") return;
+      // 创建所有初始模板文件（仅对尚不存在的文件创建）
       await bootstrapManager.createInitTemplates();
     },
 
     event: async ({ event }) => {
+      // 不同事件类型携带的 sessionID 在不同属性位置
       const sessionID =
         event.type === "session.idle"
           ? event.properties.sessionID
@@ -123,6 +130,7 @@ export const MemoryPlugin: Plugin = async (ctx: PluginInput) => {
             ? event.properties.info.id
             : undefined;
 
+      // session.created：注册新的会话状态
       if (event.type === "session.created" && sessionID) {
         sessionStates.set(sessionID, {
           memoryOperations: [],
@@ -130,10 +138,12 @@ export const MemoryPlugin: Plugin = async (ctx: PluginInput) => {
         });
       }
 
+      // session.deleted：清理会话状态，避免内存泄漏
       if (event.type === "session.deleted" && sessionID) {
         sessionStates.delete(sessionID);
       }
 
+      // session.idle：用户离开终端时，若有 memory 操作但未更新 daily，弹出提示
       if (event.type === "session.idle" && sessionID) {
         const state = sessionStates.get(sessionID);
         if (
@@ -159,12 +169,14 @@ export const MemoryPlugin: Plugin = async (ctx: PluginInput) => {
         const args = input.args as MemoryCallArgs;
 
         if (state) {
+          // 记录每次 memory 工具调用，用于空闲提醒
           state.memoryOperations.push({
             action: args.action ?? "unknown",
             target: args.target ?? "unknown",
             timestamp: new Date().toISOString(),
           });
 
+          // 单独标记 daily 更新，避免在已更新后重复提醒
           if (args.target === "daily") {
             state.lastDailyUpdate = new Date().toISOString();
           }
@@ -175,6 +187,7 @@ export const MemoryPlugin: Plugin = async (ctx: PluginInput) => {
     "experimental.chat.system.transform": async (_input, output) => {
       const memoryContext = buildContext(projectId);
       if (!memoryContext) return;
+      // 将记忆上下文和感知指令注入到系统提示词中
       const instructions = getMemoryInstructions();
       output.system.push(memoryContext + instructions);
     },
@@ -270,6 +283,7 @@ export const MemoryPlugin: Plugin = async (ctx: PluginInput) => {
         async execute(args) {
           await memoryManager.ensureDirectories();
           validateAction(args.action);
+          // 自动注入当前项目 ID 到 read/write 操作（如果适用）
           const projectArgs = applyDefaultProject(args, projectId);
 
           switch (args.action) {
@@ -282,6 +296,7 @@ export const MemoryPlugin: Plugin = async (ctx: PluginInput) => {
             case "delete":
               return handleDelete(projectArgs, memoryManager);
             case "search":
+              // search 使用原始 args（含 query, max_results, scope 等非 project 字段）
               return handleSearch(args, memoryManager, projectId);
             case "list":
               return handleList(args, memoryManager);
