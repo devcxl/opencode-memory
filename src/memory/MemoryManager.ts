@@ -9,7 +9,7 @@ import type {
   MonthGroup,
 } from "../types.js";
 import type { MemoryConfig } from "../config/runtime.js";
-import { ensureDir } from "../utils/fs.js";
+import { ensureDir, readFileSafe } from "../utils/fs.js";
 import { MemoryPaths } from "./MemoryPaths.js";
 import { atomicWrite } from "../utils/atomicWrite.js";
 import {
@@ -189,11 +189,7 @@ export class MemoryManager {
    * 避免调用方需要逐层 try/catch
    */
   readFile(filePath: string): string | null {
-    try {
-      return fs.readFileSync(filePath, "utf-8");
-    } catch {
-      return null;
-    }
+    return readFileSafe(filePath);
   }
 
   /**
@@ -202,12 +198,10 @@ export class MemoryManager {
    */
   async writeFile(filePath: string, content: string): Promise<void> {
     checkLineLimit(filePath, content);
-    atomicWrite(filePath, content);
-    await this.embedAndIndex(filePath, content);
-    await gitCommit(
-      `Update ${path.basename(filePath)}`,
+    await this.persistAndIndex(
       filePath,
-      this.config.memoryDir,
+      content,
+      `Update ${path.basename(filePath)}`,
     );
   }
 
@@ -237,12 +231,10 @@ export class MemoryManager {
     }
 
     const updatedContent = content.replace(oldString, newString);
-    atomicWrite(filePath, updatedContent);
-    await this.embedAndIndex(filePath, updatedContent);
-    await gitCommit(
-      `Edit ${path.basename(filePath)}`,
+    await this.persistAndIndex(
       filePath,
-      this.config.memoryDir,
+      updatedContent,
+      `Edit ${path.basename(filePath)}`,
     );
   }
 
@@ -281,12 +273,10 @@ export class MemoryManager {
       .map((e) => `<!-- ${e.timestamp} -->\n${e.content}`)
       .join("\n\n");
 
-    atomicWrite(filePath, newContent);
-    await this.embedAndIndex(filePath, newContent);
-    await gitCommit(
-      `Delete entries from ${path.basename(filePath)}`,
+    await this.persistAndIndex(
       filePath,
-      this.config.memoryDir,
+      newContent,
+      `Delete entries from ${path.basename(filePath)}`,
     );
 
     return `Deleted ${entries.length - filteredEntries.length} entries from ${displayName}`;
@@ -304,12 +294,10 @@ export class MemoryManager {
     const newContent = (existing ?? "") + separator + stamped;
 
     checkLineLimit(filePath, newContent);
-    atomicWrite(filePath, newContent);
-    await this.embedAndIndex(filePath, newContent);
-    await gitCommit(
-      `Append to ${path.basename(filePath)}`,
+    await this.persistAndIndex(
       filePath,
-      this.config.memoryDir,
+      newContent,
+      `Append to ${path.basename(filePath)}`,
     );
   }
 
@@ -380,6 +368,20 @@ export class MemoryManager {
         throw err;
       }
     }
+  }
+
+  /**
+   * 写入文件、更新向量索引、提交 git 三合一操作
+   * 所有写入/编辑/删除/追加方法在修改文件后均执行此流程
+   */
+  private async persistAndIndex(
+    filePath: string,
+    content: string,
+    operation: string,
+  ): Promise<void> {
+    atomicWrite(filePath, content);
+    await this.embedAndIndex(filePath, content);
+    await gitCommit(operation, filePath, this.config.memoryDir);
   }
 
   /**
