@@ -463,12 +463,14 @@ export class MemoryManager {
     maxResults: number = 20,
     period?: string,
     projectId?: string | null,
+    scope: "all" | "global" | "project" = "all",
   ): Promise<SemanticSearchResult[]> {
     return this.fileSearcher.semanticSearch(
       query,
       maxResults,
       period,
       projectId,
+      scope,
     );
   }
 

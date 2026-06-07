@@ -40,14 +40,16 @@
 
 | 操作 | 描述 | 参数 |
 |--------|-------------|------------|
-| `read` | 读取记忆文件 | `target`: memory, identity, user, daily; `date`, `project`（可选） |
-| `write` | 写入记忆文件 | `target`, `content`, `mode`: append/overwrite; `date`, `project`（可选） |
-| `edit` | 编辑文件中的指定内容 | `target`, `oldString`, `newString`; `date`, `project`（可选） |
-| `delete` | 按时间戳删除条目 | `target`, `timestamp`; `date`, `project`（可选） |
+| `read` | 读取记忆文件 | `target`: memory, identity, user, daily; `date`, `scope`（可选） |
+| `write` | 写入记忆文件 | `target`, `content`, `mode`: append/overwrite; `date`, `scope`（可选） |
+| `edit` | 编辑文件中的指定内容 | `target`, `oldString`, `newString`; `date`, `scope`（可选） |
+| `delete` | 按时间戳删除条目 | `target`, `timestamp`; `date`, `scope`（可选） |
 | `search` | 语义搜索记忆文件 | `query`, `max_results`, `period`, `scope`（可选） |
 | `list` | 列出记忆文件 | `period`（可选） |
 
 **示例:**
+
+使用 `--scope project` 操作当前项目记忆。projectId 从 git 自动检测；检测失败时降级为全局记忆。
 
 ```bash
 memory --action read --target memory
@@ -59,7 +61,7 @@ memory --action search --query "PostgreSQL"
 memory --action search --query "bug" --period 2026-06 --scope project
 memory --action list
 memory --action list --period 2026-06
-memory --action write --target memory --project my-project --content "Use port 5432"
+memory --action write --target memory --scope project --content "Use port 5432"
 ```
 
 ## 首次运行流程

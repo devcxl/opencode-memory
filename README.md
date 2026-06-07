@@ -40,14 +40,16 @@ Add to your OpenCode configuration at `~/.config/opencode/opencode.json`:
 
 | Action | Description | Parameters |
 |--------|-------------|------------|
-| `read` | Read memory file | `target`: memory, identity, user, daily; `date`, `project` (optional) |
-| `write` | Write to memory file | `target`, `content`, `mode`: append/overwrite; `date`, `project` (optional) |
-| `edit` | Edit specific part of file | `target`, `oldString`, `newString`; `date`, `project` (optional) |
-| `delete` | Delete entry by timestamp | `target`, `timestamp`; `date`, `project` (optional) |
+| `read` | Read memory file | `target`: memory, identity, user, daily; `date`, `scope` (optional) |
+| `write` | Write to memory file | `target`, `content`, `mode`: append/overwrite; `date`, `scope` (optional) |
+| `edit` | Edit specific part of file | `target`, `oldString`, `newString`; `date`, `scope` (optional) |
+| `delete` | Delete entry by timestamp | `target`, `timestamp`; `date`, `scope` (optional) |
 | `search` | Semantic search memory files | `query`, `max_results`, `period`, `scope` (optional) |
 | `list` | List memory files | `period` (optional) |
 
 **Examples:**
+
+Use `--scope project` for the current project memory. The project ID is auto-detected from git; if detection fails, memory falls back to global.
 
 ```bash
 memory --action read --target memory
@@ -59,7 +61,7 @@ memory --action search --query "PostgreSQL"
 memory --action search --query "bug" --period 2026-06 --scope project
 memory --action list
 memory --action list --period 2026-06
-memory --action write --target memory --project my-project --content "Use port 5432"
+memory --action write --target memory --scope project --content "Use port 5432"
 ```
 
 ## First Run Flow

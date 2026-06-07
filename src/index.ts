@@ -15,7 +15,7 @@ import { handleEdit } from "./handlers/handleEdit.js";
 import { handleDelete } from "./handlers/handleDelete.js";
 import { handleSearch } from "./handlers/handleSearch.js";
 import { handleList } from "./handlers/handleList.js";
-import { applyDefaultProject } from "./utils/defaultProject.js";
+import { resolveProjectId } from "./utils/defaultProject.js";
 
 /** 追踪当前会话中 memory 工具调用记录，用于空闲时提示更新 daily log */
 interface SessionState {
@@ -185,7 +185,9 @@ export const MemoryPlugin: Plugin = async (ctx: PluginInput) => {
     },
 
     "experimental.chat.system.transform": async (_input, output) => {
-      const memoryContext = buildContext(projectId);
+      const memoryContext = buildContext(
+        resolveProjectId(undefined, projectId),
+      );
       if (!memoryContext) return;
       // 将记忆上下文和感知指令注入到系统提示词中
       const instructions = getMemoryInstructions();
@@ -272,32 +274,39 @@ export const MemoryPlugin: Plugin = async (ctx: PluginInput) => {
           scope: tool.schema
             .enum(["all", "global", "project"])
             .optional()
-            .describe("Search scope: all (default), global, or project only"),
-          project: tool.schema
-            .string()
-            .optional()
             .describe(
-              "Target project ID for read/write. Auto-detected if omitted.",
+              "Scope for memory operations: 'global' (global only), 'project' (auto-detect current project, fallback to global), 'all' (search both). Default: auto-detect.",
             ),
         },
         async execute(args) {
           await memoryManager.ensureDirectories();
           validateAction(args.action);
-          // 自动注入当前项目 ID 到 read/write 操作（如果适用）
-          const projectArgs = applyDefaultProject(args, projectId);
+          // scope → project 解析：project 时自动 detectProject()，检测不到降级为全局
+          const resolvedProject = resolveProjectId(args.scope, projectId);
 
           switch (args.action) {
             case "read":
-              return handleRead(projectArgs, memoryManager);
+              return handleRead(
+                { ...args, project: resolvedProject ?? undefined },
+                memoryManager,
+              );
             case "write":
-              return handleWrite(projectArgs, memoryManager);
+              return handleWrite(
+                { ...args, project: resolvedProject ?? undefined },
+                memoryManager,
+              );
             case "edit":
-              return handleEdit(projectArgs, memoryManager);
+              return handleEdit(
+                { ...args, project: resolvedProject ?? undefined },
+                memoryManager,
+              );
             case "delete":
-              return handleDelete(projectArgs, memoryManager);
+              return handleDelete(
+                { ...args, project: resolvedProject ?? undefined },
+                memoryManager,
+              );
             case "search":
-              // search 使用原始 args（含 query, max_results, scope 等非 project 字段）
-              return handleSearch(args, memoryManager, projectId);
+              return handleSearch(args, memoryManager, resolvedProject);
             case "list":
               return handleList(args, memoryManager);
             default:

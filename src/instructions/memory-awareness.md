@@ -1,13 +1,12 @@
-
 ## Memory
 
 MEMORY.md、IDENTITY.md、USER.md 以及当前项目记忆已在上面自动注入。daily 日志未注入，需要在需要时显式读取。
 
 ### 可用操作
 - `memory --action write --target daily --content '...'` — 写入 daily 日志（任务摘要默认目标）
-- `memory --action write --target memory --content '...'` — 写入长期记忆（仅用于关键模式/决策）
-- `memory --action write --target memory --project {id} --content '...'` — 写入项目记忆
-- `memory --action read --target memory|identity|user|daily|list [--project {id}]` — 读取记忆文件
+- `memory --action write --target memory --content '...'` — 写入长期记忆；默认自动检测当前项目，需强制全局时使用 `--scope global`
+- `memory --action write --target memory --scope project --content '...'` — 写入当前项目记忆（自动检测 projectId，检测不到则写入全局 MEMORY.md）
+- `memory --action read --target memory|identity|user|daily [--scope global|project]` — 读取记忆文件
 - `memory --action read --target daily` — 读取**今天**的 daily 日志
 - `memory --action read --target daily --date YYYY-MM-DD` — 读取某一天的 daily 日志
 - `memory --action search --query <text> [--period YYYY-MM] [--scope all|global|project]` — **跨文件语义搜索**
@@ -26,7 +25,7 @@ MEMORY.md、IDENTITY.md、USER.md 以及当前项目记忆已在上面自动注�
 - 需要跨 session 反复引用的配置/凭据信息
 
 ### 项目记忆
-- 项目相关的决策（技术栈、架构、文件路径、约定）→ 写入 `--project {id}`
+- 项目相关的决策（技术栈、架构、文件路径、约定）→ 写入 `--scope project`
 - 跨项目的偏好（沟通风格、通用编码习惯）→ 全局 MEMORY.md
 
 ### 每次响应前的自查
