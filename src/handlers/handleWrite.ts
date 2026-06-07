@@ -1,5 +1,6 @@
 import type { MemoryManager } from "../memory/MemoryManager.js";
 import { validateTarget, validateContent } from "../utils/validation.js";
+import { toErrorMessage } from "../utils/fs.js";
 
 /**
  * 写入或追加内容到内存文件。
@@ -64,6 +65,6 @@ export async function handleWrite(
 
     return `${mode === "overwrite" ? "Wrote to" : "Appended to"} ${displayName}.${reflectionPrompt}\n\nTimestamp: ${timestamp}`;
   } catch (error) {
-    return error instanceof Error ? error.message : `Unknown target: ${target}`;
+    return toErrorMessage(error, `Unknown target: ${target}`);
   }
 }

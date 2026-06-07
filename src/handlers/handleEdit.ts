@@ -1,4 +1,5 @@
 import type { MemoryManager } from "../memory/MemoryManager.js";
+import { toErrorMessage } from "../utils/fs.js";
 
 /**
  * 替换内存文件中的指定文本片段。
@@ -42,6 +43,6 @@ export async function handleEdit(
     const timestamp = memoryManager.getLocalTimestamp();
     return `Edited ${displayName}\n\nTimestamp: ${timestamp}`;
   } catch (error) {
-    return error instanceof Error ? error.message : `Failed to edit ${target}`;
+    return toErrorMessage(error, `Failed to edit ${target}`);
   }
 }

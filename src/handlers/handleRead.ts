@@ -1,5 +1,6 @@
 import type { MemoryManager } from "../memory/MemoryManager.js";
 import { handleList } from "./handleList.js";
+import { toErrorMessage } from "../utils/fs.js";
 
 /**
  * 读取指定目标的内存文件内容。
@@ -31,6 +32,6 @@ export function handleRead(
     }
     return content;
   } catch (error) {
-    return error instanceof Error ? error.message : `Unknown target: ${target}`;
+    return toErrorMessage(error, `Unknown target: ${target}`);
   }
 }

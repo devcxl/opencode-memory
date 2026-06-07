@@ -1,5 +1,6 @@
 import type { MemoryManager } from "../memory/MemoryManager.js";
 import { validateTarget, validateTimestamp } from "../utils/validation.js";
+import { toErrorMessage } from "../utils/fs.js";
 
 /**
  * 按精确时间戳删除内存文件中的条目。
@@ -40,8 +41,6 @@ export async function handleDelete(
     );
     return `${result}\n\nDeleted timestamp: ${timestamp}`;
   } catch (error) {
-    return error instanceof Error
-      ? error.message
-      : `Failed to delete from ${target}`;
+    return toErrorMessage(error, `Failed to delete from ${target}`);
   }
 }
