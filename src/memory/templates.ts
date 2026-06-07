@@ -1,26 +1,22 @@
-import * as fs from "node:fs";
-import * as path from "node:path";
+import memoryTemplateRaw from "../instructions/memory-template.md";
+import identityTemplateRaw from "../instructions/identity-template.md";
+import userTemplateRaw from "../instructions/user-template.md";
 import { bootstrapTemplate } from "../instructions/memoryInstructions.js";
-
-const readTemplate = (filename: string): string =>
-  fs.readFileSync(
-    path.join(__dirname, "..", "instructions", filename),
-    "utf-8",
-  );
+import memoryAwarenessRaw from "../instructions/memory-awareness.md";
 
 export const BOOTSTRAP_TEMPLATE = (bootstrapPath: string): string => {
-  const memoryAwareness = readTemplate("memory-awareness.md").replace(
+  const memoryAwareness = memoryAwarenessRaw.replace(
     /\{today\}/g,
     new Date().toISOString().slice(0, 10),
   );
   return bootstrapTemplate(bootstrapPath, memoryAwareness);
 };
 
-export const MEMORY_TEMPLATE = readTemplate("memory-template.md");
+export const MEMORY_TEMPLATE = memoryTemplateRaw;
 
-export const IDENTITY_TEMPLATE = readTemplate("identity-template.md");
+export const IDENTITY_TEMPLATE = identityTemplateRaw;
 
-export const USER_TEMPLATE = readTemplate("user-template.md");
+export const USER_TEMPLATE = userTemplateRaw;
 
 const MEMORY_TEMPLATE_LINES = nonEmptyLines(MEMORY_TEMPLATE);
 const IDENTITY_TEMPLATE_LINES = nonEmptyLines(IDENTITY_TEMPLATE);
