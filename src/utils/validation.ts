@@ -54,6 +54,15 @@ export function validateTimestampOrDate(value: string): void {
   validateTimestamp(value);
 }
 
+/** 将 daily 的 date 参数规范为 YYYY-MM-DD；空值表示未指定 */
+export function normalizeDailyDate(date?: string): string | undefined {
+  if (date === undefined) return undefined;
+  const value = date.trim();
+  if (!value) return undefined;
+  validateTimestamp(value);
+  return value.slice(0, 10);
+}
+
 /** 仅对 MEMORY.md 做行数上限检查，避免历史累积导致性能问题 */
 export function checkLineLimit(filePath: string, content: string): void {
   const fileName = filePath.split("/").pop();

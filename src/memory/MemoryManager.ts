@@ -12,7 +12,11 @@ import type { MemoryConfig } from "../config/runtime.js";
 import { ensureDir } from "../utils/fs.js";
 import { MemoryPaths } from "./MemoryPaths.js";
 import { atomicWrite } from "../utils/atomicWrite.js";
-import { checkLineLimit, validateProjectId } from "../utils/validation.js";
+import {
+  checkLineLimit,
+  normalizeDailyDate,
+  validateProjectId,
+} from "../utils/validation.js";
 import { gitCommit } from "../utils/git.js";
 import {
   embedText,
@@ -164,7 +168,7 @@ export class MemoryManager {
       case "user":
         return { filePath: this.getUserPath(), displayName: "USER.md" };
       case "daily": {
-        const targetDate = date ?? this.todayStr();
+        const targetDate = normalizeDailyDate(date) ?? this.todayStr();
         return {
           filePath: this.getDailyPath(targetDate),
           displayName: `daily/${targetDate}.md`,

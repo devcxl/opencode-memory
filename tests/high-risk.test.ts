@@ -283,6 +283,26 @@ test("project memory rejects path traversal project ids", () => {
   }
 });
 
+test("daily path normalizes timestamp and empty date inputs", () => {
+  const { homeDir, memoryDir } = makeTempHome();
+
+  try {
+    const manager = new MemoryManager({ memoryDir });
+
+    expect(
+      manager.getPathForTarget("daily", "2026-06-07 00:00:00").filePath,
+    ).toBe(path.join(memoryDir, "daily", "2026-06-07.md"));
+    expect(manager.getPathForTarget("daily", "").filePath).toBe(
+      path.join(memoryDir, "daily", `${manager.todayStr()}.md`),
+    );
+    expect(() => manager.getPathForTarget("daily", "bad-date")).toThrow(
+      "Invalid timestamp format",
+    );
+  } finally {
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  }
+});
+
 test("nested project memory indexes into the matching owner/repo project store", async () => {
   const { homeDir, memoryDir } = makeTempHome();
 
