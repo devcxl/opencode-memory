@@ -75,8 +75,8 @@ export const MemoryPlugin: Plugin = async (ctx: PluginInput) => {
     return `# Memory Context\n\n${sections.join("\n\n---\n\n")}`;
   };
 
-  // 引导阶段使用静态指令，常规阶段使用含 {today} 的动态指令。
-  // 静态指令不需要日期替换（引导过程可能跨天），动态指令需要今天日期。
+  // 引导阶段使用静态指令，常规阶段使用不含日期的静态指令。
+  // 避免 {today} 替换导致每天 prompt 不同、KV cache 全量失效。
   const getMemoryInstructions = (): string => {
     if (bootstrapManager.isBootstrapNeeded()) {
       return BOOTSTRAP_INSTRUCTIONS;

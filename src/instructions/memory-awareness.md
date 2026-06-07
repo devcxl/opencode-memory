@@ -8,7 +8,7 @@ MEMORY.md、IDENTITY.md、USER.md 以及当前项目记忆已在上面自动注�
 - `memory --action write --target memory --content '...'` — 写入长期记忆（仅用于关键模式/决策）
 - `memory --action write --target memory --project {id} --content '...'` — 写入项目记忆
 - `memory --action read --target memory|identity|user|daily|list [--project {id}]` — 读取记忆文件
-- `memory --action read --target daily` — 读取**今天**（{today}）的 daily 日志
+- `memory --action read --target daily` — 读取**今天**的 daily 日志
 - `memory --action read --target daily --date YYYY-MM-DD` — 读取某一天的 daily 日志
 - `memory --action search --query <text> [--period YYYY-MM] [--scope all|global|project]` — **跨文件语义搜索**
 - `memory --action list [--period YYYY-MM|YYYY]` — 按月份列出所有文件
@@ -58,5 +58,5 @@ MEMORY.md、IDENTITY.md、USER.md 以及当前项目记忆已在上面自动注�
 - 不要在内容中手动嵌入时间戳（系统自动生成）
 
 ### 自动提醒
-- 当天的 daily 日志（{today}.md）— 如果缺失则创建，任务完成后更新
+- 当天的 daily 日志 — 如果缺失则创建，任务完成后更新
 - 记忆文件可能过期 — 如有冲突请与用户确认

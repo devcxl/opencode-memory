@@ -5,11 +5,7 @@ import { bootstrapTemplate } from "../instructions/memoryInstructions.js";
 import memoryAwarenessRaw from "../instructions/memory-awareness.md";
 
 export const BOOTSTRAP_TEMPLATE = (bootstrapPath: string): string => {
-  const memoryAwareness = memoryAwarenessRaw.replace(
-    /\{today\}/g,
-    new Date().toISOString().slice(0, 10),
-  );
-  return bootstrapTemplate(bootstrapPath, memoryAwareness);
+  return bootstrapTemplate(bootstrapPath, memoryAwarenessRaw);
 };
 
 export const MEMORY_TEMPLATE = memoryTemplateRaw;
