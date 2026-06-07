@@ -24,6 +24,7 @@ import {
   upsertFile,
   deleteFileVectors,
   ProjectStore,
+  refreshStaleIndices,
 } from "../search/vector-store.js";
 import { parseContentByTimestamp } from "../utils/timestampParser.js";
 import { StateChecker } from "./StateChecker.js";
@@ -49,10 +50,31 @@ export class MemoryManager {
     );
   }
 
-  /** 确保 memory 和 daily 目录存在 */
-  ensureDirectories(): void {
+  private freshIndexDone = false;
+
+  /** 确保 memory 和 daily 目录存在，并在首次调用时重建因模型切换而失效的索引 */
+  async ensureDirectories(): Promise<void> {
     ensureDir(this.config.memoryDir);
     ensureDir(this.paths.dailyDir);
+    if (!this.freshIndexDone) {
+      this.freshIndexDone = true;
+      await this.ensureFreshIndex();
+    }
+  }
+
+  private async ensureFreshIndex(): Promise<void> {
+    const stalePaths = await refreshStaleIndices();
+    if (stalePaths.length === 0) return;
+
+    for (const filePath of stalePaths) {
+      const content = this.readFile(filePath);
+      if (!content) continue;
+      try {
+        await this.embedAndIndex(filePath, content);
+      } catch {
+        // 单个文件重建失败不影响其他文件
+      }
+    }
   }
 
   /** 获取全局 MEMORY.md 路径 */

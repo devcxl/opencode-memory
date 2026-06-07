@@ -30,6 +30,7 @@ mock.module("../src/search/vector-store.js", () => ({
     upsertCalls.push({ filePath, chunks });
   },
   deleteFileVectors: async () => {},
+  refreshStaleIndices: async (): Promise<string[]> => [],
   isCurrentEmbeddingMetadata: (metadata: Record<string, unknown> | undefined) =>
     String(metadata?.embeddingModel) === currentModelId &&
     String(metadata?.embeddingDtype) === currentDtype,
@@ -138,7 +139,7 @@ test("append write indexes the newly written daily content", async () => {
   try {
     await withHome(homeDir, async () => {
       const manager = new MemoryManager({ memoryDir });
-      manager.ensureDirectories();
+      await manager.ensureDirectories();
 
       await handleWrite(
         {
@@ -170,7 +171,7 @@ test("indexed chunks include the current embedding model", async () => {
       currentModelId = "test-model";
       currentDtype = "q8";
       const manager = new MemoryManager({ memoryDir });
-      manager.ensureDirectories();
+      await manager.ensureDirectories();
 
       await handleWrite(
         {
@@ -286,7 +287,7 @@ test("nested project memory indexes into the matching owner/repo project store",
   try {
     await withHome(homeDir, async () => {
       const manager = new MemoryManager({ memoryDir });
-      manager.ensureDirectories();
+      await manager.ensureDirectories();
 
       await handleWrite(
         {
@@ -315,7 +316,7 @@ test("memory writes default to the detected project when project is omitted", as
   try {
     await withHome(homeDir, async () => {
       const manager = new MemoryManager({ memoryDir });
-      manager.ensureDirectories();
+      await manager.ensureDirectories();
 
       await handleWrite(
         applyDefaultProject(

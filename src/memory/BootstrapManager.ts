@@ -18,8 +18,8 @@ export class BootstrapManager {
    * 创建初始模板文件（BOOTSTRAP.md / MEMORY.md / IDENTITY.md / USER.md）
    * 只在文件不存在时写入，不覆盖已有内容
    */
-  createInitTemplates(): void {
-    this.memoryManager.ensureDirectories();
+  async createInitTemplates(): Promise<void> {
+    await this.memoryManager.ensureDirectories();
 
     const bootstrapPath = this.memoryManager.getBootstrapPath();
     const memoryPath = this.memoryManager.getMemoryPath();

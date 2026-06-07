@@ -23,7 +23,6 @@ async function getRootIndex(): Promise<LocalIndex> {
     if (!(await rootIndex.isIndexCreated())) {
       await rootIndex.createIndex();
     }
-    await deleteStaleEmbeddings(rootIndex);
   }
   return rootIndex;
 }
@@ -34,7 +33,6 @@ async function getDailyIndex(): Promise<LocalIndex> {
     if (!(await dailyIndex.isIndexCreated())) {
       await dailyIndex.createIndex();
     }
-    await deleteStaleEmbeddings(dailyIndex);
   }
   return dailyIndex;
 }
@@ -57,13 +55,30 @@ export function isCurrentEmbeddingMetadata(
   );
 }
 
-async function deleteStaleEmbeddings(index: LocalIndex): Promise<void> {
+async function deleteStaleEmbeddings(index: LocalIndex): Promise<Set<string>> {
+  const stalePaths = new Set<string>();
   const items = await index.listItems();
   for (const item of items) {
     if (!isCurrentEmbeddingMetadata(item.metadata)) {
+      const filePath = String(item.metadata?.filePath ?? "");
+      if (filePath) stalePaths.add(filePath);
       await index.deleteItem(String(item.id));
     }
   }
+  return stalePaths;
+}
+
+/** 触发 root 与 daily 索引的懒初始化，清理 stale embedding，返回被清理影响的文件路径列表 */
+export async function refreshStaleIndices(): Promise<string[]> {
+  const [rootIdx, dailyIdx] = await Promise.all([
+    getRootIndex(),
+    getDailyIndex(),
+  ]);
+  const [rootStale, dailyStale] = await Promise.all([
+    deleteStaleEmbeddings(rootIdx),
+    deleteStaleEmbeddings(dailyIdx),
+  ]);
+  return [...rootStale, ...dailyStale];
 }
 
 /**
@@ -268,7 +283,6 @@ export class ProjectStore {
       if (!(await this.rootIndex.isIndexCreated())) {
         await this.rootIndex.createIndex();
       }
-      await deleteStaleEmbeddings(this.rootIndex);
     }
     return this.rootIndex;
   }

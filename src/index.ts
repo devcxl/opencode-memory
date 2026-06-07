@@ -112,7 +112,7 @@ export const MemoryPlugin: Plugin = async (ctx: PluginInput) => {
     "command.execute.before": async (input) => {
       if (input.command !== "memory-init") return;
       if (memoryManager.getInitState() === "ready") return;
-      bootstrapManager.createInitTemplates();
+      await bootstrapManager.createInitTemplates();
     },
 
     event: async ({ event }) => {
@@ -268,7 +268,7 @@ export const MemoryPlugin: Plugin = async (ctx: PluginInput) => {
             ),
         },
         async execute(args) {
-          memoryManager.ensureDirectories();
+          await memoryManager.ensureDirectories();
           validateAction(args.action);
           const projectArgs = applyDefaultProject(args, projectId);
 
