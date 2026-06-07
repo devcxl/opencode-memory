@@ -53,7 +53,9 @@ mock.module("../src/search/vector-store.js", () => ({
       })),
   semanticSearch: async (_queryVector: number[], topK: number) => {
     semanticSearchCalls.push(topK);
-    return Number.isFinite(topK) ? semanticResults.slice(0, topK) : semanticResults;
+    return Number.isFinite(topK)
+      ? semanticResults.slice(0, topK)
+      : semanticResults;
   },
   checkIndexExists: async () => false,
   ProjectStore: class {
@@ -117,7 +119,10 @@ function makeTempHome(): { homeDir: string; memoryDir: string } {
   return { homeDir, memoryDir };
 }
 
-async function withHome<T>(homeDir: string, run: () => T | Promise<T>): Promise<T> {
+async function withHome<T>(
+  homeDir: string,
+  run: () => T | Promise<T>,
+): Promise<T> {
   const previousHome = process.env.HOME;
   process.env.HOME = homeDir;
   try {
@@ -131,67 +136,64 @@ async function withHome<T>(homeDir: string, run: () => T | Promise<T>): Promise<
   }
 }
 
+async function withTempMemory<T>(
+  run: (memoryDir: string) => Promise<T>,
+): Promise<T> {
+  const { homeDir, memoryDir } = makeTempHome();
+  try {
+    return await withHome(homeDir, async () => run(memoryDir));
+  } finally {
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  }
+}
+
 function git(args: string[], cwd: string): string {
   return execFileSync("git", args, { cwd, encoding: "utf-8" });
 }
 
 test("append write indexes the newly written daily content", async () => {
-  const { homeDir, memoryDir } = makeTempHome();
+  await withTempMemory(async (memoryDir) => {
+    const manager = new MemoryManager({ memoryDir });
+    await manager.ensureDirectories();
 
-  try {
-    await withHome(homeDir, async () => {
-      const manager = new MemoryManager({ memoryDir });
-      await manager.ensureDirectories();
+    await handleWrite(
+      {
+        target: "daily",
+        date: "2026-06-06",
+        content: "## Entry\nunique append searchable content",
+      },
+      manager,
+    );
 
-      await handleWrite(
-        {
-          target: "daily",
-          date: "2026-06-06",
-          content: "## Entry\nunique append searchable content",
-        },
-        manager,
-      );
-
-      expect(upsertCalls).toHaveLength(1);
-      expect(upsertCalls[0].filePath).toBe(
-        path.join(memoryDir, "daily", "2026-06-06.md"),
-      );
-      expect(upsertCalls[0].chunks[0].metadata.text).toContain(
-        "unique append searchable content",
-      );
-    });
-  } finally {
-    fs.rmSync(homeDir, { recursive: true, force: true });
-  }
+    expect(upsertCalls).toHaveLength(1);
+    expect(upsertCalls[0].filePath).toBe(
+      path.join(memoryDir, "daily", "2026-06-06.md"),
+    );
+    expect(upsertCalls[0].chunks[0].metadata.text).toContain(
+      "unique append searchable content",
+    );
+  });
 });
 
 test("indexed chunks include the current embedding model", async () => {
-  const { homeDir, memoryDir } = makeTempHome();
+  await withTempMemory(async (memoryDir) => {
+    currentModelId = "test-model";
+    currentDtype = "q8";
+    const manager = new MemoryManager({ memoryDir });
+    await manager.ensureDirectories();
 
-  try {
-    await withHome(homeDir, async () => {
-      currentModelId = "test-model";
-      currentDtype = "q8";
-      const manager = new MemoryManager({ memoryDir });
-      await manager.ensureDirectories();
+    await handleWrite(
+      {
+        target: "daily",
+        date: "2026-06-06",
+        content: "## Entry\nmodel metadata content",
+      },
+      manager,
+    );
 
-      await handleWrite(
-        {
-          target: "daily",
-          date: "2026-06-06",
-          content: "## Entry\nmodel metadata content",
-        },
-        manager,
-      );
-
-      expect(upsertCalls[0].chunks[0].metadata.embeddingModel).toBe(
-        "test-model",
-      );
-      expect(upsertCalls[0].chunks[0].metadata.embeddingDtype).toBe("q8");
-    });
-  } finally {
-    fs.rmSync(homeDir, { recursive: true, force: true });
-  }
+    expect(upsertCalls[0].chunks[0].metadata.embeddingModel).toBe("test-model");
+    expect(upsertCalls[0].chunks[0].metadata.embeddingDtype).toBe("q8");
+  });
 });
 
 test("gitCommit stages only the memory file, not unrelated parent repo changes", async () => {
@@ -217,12 +219,12 @@ test("gitCommit stages only the memory file, not unrelated parent repo changes",
       await gitCommit("Update MEMORY.md", memoryFile, memoryDir);
     });
 
-    expect(git(["status", "--porcelain", "--", "unrelated.txt"], repoDir)).toContain(
-      "unrelated.txt",
-    );
-    expect(git(["status", "--porcelain", "--", "memory/MEMORY.md"], repoDir)).toBe(
-      "",
-    );
+    expect(
+      git(["status", "--porcelain", "--", "unrelated.txt"], repoDir),
+    ).toContain("unrelated.txt");
+    expect(
+      git(["status", "--porcelain", "--", "memory/MEMORY.md"], repoDir),
+    ).toBe("");
   } finally {
     fs.rmSync(homeDir, { recursive: true, force: true });
   }
@@ -253,15 +255,15 @@ test("gitCommit does not include unrelated staged changes in the memory commit",
       await gitCommit("Update MEMORY.md", memoryFile, memoryDir);
     });
 
-    expect(git(["status", "--porcelain", "--", "unrelated.txt"], repoDir)).toStartWith(
-      "M  ",
-    );
-    expect(git(["status", "--porcelain", "--", "memory/MEMORY.md"], repoDir)).toBe(
-      "",
-    );
-    expect(git(["show", "--name-only", "--pretty=format:", "HEAD"], repoDir).trim()).toBe(
-      "memory/MEMORY.md",
-    );
+    expect(
+      git(["status", "--porcelain", "--", "unrelated.txt"], repoDir),
+    ).toStartWith("M  ");
+    expect(
+      git(["status", "--porcelain", "--", "memory/MEMORY.md"], repoDir),
+    ).toBe("");
+    expect(
+      git(["show", "--name-only", "--pretty=format:", "HEAD"], repoDir).trim(),
+    ).toBe("memory/MEMORY.md");
   } finally {
     fs.rmSync(homeDir, { recursive: true, force: true });
   }
@@ -304,141 +306,115 @@ test("daily path normalizes timestamp and empty date inputs", () => {
 });
 
 test("nested project memory indexes into the matching owner/repo project store", async () => {
-  const { homeDir, memoryDir } = makeTempHome();
+  await withTempMemory(async (memoryDir) => {
+    const manager = new MemoryManager({ memoryDir });
+    await manager.ensureDirectories();
 
-  try {
-    await withHome(homeDir, async () => {
-      const manager = new MemoryManager({ memoryDir });
-      await manager.ensureDirectories();
+    await handleWrite(
+      {
+        target: "memory",
+        project: "owner/repo",
+        content: "## Project\nnested project searchable content",
+      },
+      manager,
+    );
 
-      await handleWrite(
-        {
-          target: "memory",
-          project: "owner/repo",
-          content: "## Project\nnested project searchable content",
-        },
-        manager,
-      );
-
-      expect(projectStoreBasePaths).toContain(
-        path.join(memoryDir, "projects", "owner", "repo"),
-      );
-      expect(upsertCalls[0].filePath).toBe(
-        path.join(memoryDir, "projects", "owner", "repo", "MEMORY.md"),
-      );
-    });
-  } finally {
-    fs.rmSync(homeDir, { recursive: true, force: true });
-  }
+    expect(projectStoreBasePaths).toContain(
+      path.join(memoryDir, "projects", "owner", "repo"),
+    );
+    expect(upsertCalls[0].filePath).toBe(
+      path.join(memoryDir, "projects", "owner", "repo", "MEMORY.md"),
+    );
+  });
 });
 
 test("memory writes default to the detected project when project is omitted", async () => {
-  const { homeDir, memoryDir } = makeTempHome();
+  await withTempMemory(async (memoryDir) => {
+    const manager = new MemoryManager({ memoryDir });
+    await manager.ensureDirectories();
 
-  try {
-    await withHome(homeDir, async () => {
-      const manager = new MemoryManager({ memoryDir });
-      await manager.ensureDirectories();
+    // resolveProjectId 未指定 scope 时自动检测项目
+    const resolved = resolveProjectId(undefined, "owner/repo");
+    expect(resolved).toBe("owner/repo");
 
-      // resolveProjectId 未指定 scope 时自动检测项目
-      const resolved = resolveProjectId(undefined, "owner/repo");
-      expect(resolved).toBe("owner/repo");
+    await handleWrite(
+      {
+        target: "memory",
+        project: resolved!,
+        content: "## Project\ndefault project searchable content",
+      },
+      manager,
+    );
 
-      await handleWrite(
-        {
-          target: "memory",
-          project: resolved!,
-          content: "## Project\ndefault project searchable content",
-        },
-        manager,
-      );
-
-      expect(upsertCalls[0].filePath).toBe(
-        path.join(memoryDir, "projects", "owner", "repo", "MEMORY.md"),
-      );
-      expect(fs.existsSync(path.join(memoryDir, "MEMORY.md"))).toBe(false);
-    });
-  } finally {
-    fs.rmSync(homeDir, { recursive: true, force: true });
-  }
+    expect(upsertCalls[0].filePath).toBe(
+      path.join(memoryDir, "projects", "owner", "repo", "MEMORY.md"),
+    );
+    expect(fs.existsSync(path.join(memoryDir, "MEMORY.md"))).toBe(false);
+  });
 });
 
 test("memory tool writes default to the detected project when project is omitted", async () => {
-  const { homeDir, memoryDir } = makeTempHome();
+  await withTempMemory(async (memoryDir) => {
+    const hooks = await MemoryPlugin({} as any);
 
-  try {
-    await withHome(homeDir, async () => {
-      const hooks = await MemoryPlugin({} as any);
-
-      await hooks.tool!.memory.execute({
-        action: "write",
-        target: "memory",
-        content: "## Project\nplugin default project content",
-      });
-
-      expect(upsertCalls[0].filePath).toBe(
-        path.join(memoryDir, "projects", "owner", "repo", "MEMORY.md"),
-      );
-      expect(fs.existsSync(path.join(memoryDir, "MEMORY.md"))).toBe(false);
+    await hooks.tool!.memory.execute({
+      action: "write",
+      target: "memory",
+      content: "## Project\nplugin default project content",
     });
-  } finally {
-    fs.rmSync(homeDir, { recursive: true, force: true });
-  }
+
+    expect(upsertCalls[0].filePath).toBe(
+      path.join(memoryDir, "projects", "owner", "repo", "MEMORY.md"),
+    );
+    expect(fs.existsSync(path.join(memoryDir, "MEMORY.md"))).toBe(false);
+  });
 });
 
 test("memory tool writes to global memory when scope is global", async () => {
-  const { homeDir, memoryDir } = makeTempHome();
+  await withTempMemory(async (memoryDir) => {
+    const hooks = await MemoryPlugin({} as any);
 
-  try {
-    await withHome(homeDir, async () => {
-      const hooks = await MemoryPlugin({} as any);
-
-      await hooks.tool!.memory.execute({
-        action: "write",
-        target: "memory",
-        scope: "global",
-        content: "## Global\nplugin global memory content",
-      });
-
-      expect(upsertCalls[0].filePath).toBe(path.join(memoryDir, "MEMORY.md"));
-      expect(
-        fs.existsSync(
-          path.join(memoryDir, "projects", "owner", "repo", "MEMORY.md"),
-        ),
-      ).toBe(false);
+    await hooks.tool!.memory.execute({
+      action: "write",
+      target: "memory",
+      scope: "global",
+      content: "## Global\nplugin global memory content",
     });
-  } finally {
-    fs.rmSync(homeDir, { recursive: true, force: true });
-  }
+
+    expect(upsertCalls[0].filePath).toBe(path.join(memoryDir, "MEMORY.md"));
+    expect(
+      fs.existsSync(
+        path.join(memoryDir, "projects", "owner", "repo", "MEMORY.md"),
+      ),
+    ).toBe(false);
+  });
 });
 
 test("memory tool reads default to the detected project when project is omitted", async () => {
-  const { homeDir, memoryDir } = makeTempHome();
+  await withTempMemory(async (memoryDir) => {
+    const projectMemoryPath = path.join(
+      memoryDir,
+      "projects",
+      "owner",
+      "repo",
+      "MEMORY.md",
+    );
+    fs.mkdirSync(path.dirname(projectMemoryPath), { recursive: true });
+    fs.writeFileSync(
+      path.join(memoryDir, "MEMORY.md"),
+      "global content",
+      "utf-8",
+    );
+    fs.writeFileSync(projectMemoryPath, "project content", "utf-8");
 
-  try {
-    await withHome(homeDir, async () => {
-      const projectMemoryPath = path.join(
-        memoryDir,
-        "projects",
-        "owner",
-        "repo",
-        "MEMORY.md",
-      );
-      fs.mkdirSync(path.dirname(projectMemoryPath), { recursive: true });
-      fs.writeFileSync(path.join(memoryDir, "MEMORY.md"), "global content", "utf-8");
-      fs.writeFileSync(projectMemoryPath, "project content", "utf-8");
-
-      const hooks = await MemoryPlugin({} as any);
-      const result = await hooks.tool!.memory.execute({
-        action: "read",
-        target: "memory",
-      });
-
-      expect(result).toBe("project content");
+    const hooks = await MemoryPlugin({} as any);
+    const result = await hooks.tool!.memory.execute({
+      action: "read",
+      target: "memory",
     });
-  } finally {
-    fs.rmSync(homeDir, { recursive: true, force: true });
-  }
+
+    expect(result).toBe("project content");
+  });
 });
 
 test("resolveProjectId handles scope correctly", () => {
@@ -645,7 +621,12 @@ test("semantic search filters after enough results are retrieved for period", as
       },
     );
 
-    const results = await searcher.semanticSearch("target", 20, "2026-06", null);
+    const results = await searcher.semanticSearch(
+      "target",
+      20,
+      "2026-06",
+      null,
+    );
 
     expect(results).toHaveLength(1);
     expect(results[0].text).toBe("target month content");
@@ -691,7 +672,12 @@ test("semantic search does not fallback to the first timestamp when multiple ent
       },
     );
 
-    const results = await searcher.semanticSearch("unmatched", 20, "2026-05", null);
+    const results = await searcher.semanticSearch(
+      "unmatched",
+      20,
+      "2026-05",
+      null,
+    );
 
     expect(results).toHaveLength(0);
   } finally {
@@ -736,7 +722,12 @@ test("semantic search does not bind a cross-entry legacy chunk to the first time
       },
     );
 
-    const results = await searcher.semanticSearch("searchable", 20, "2026-05", null);
+    const results = await searcher.semanticSearch(
+      "searchable",
+      20,
+      "2026-05",
+      null,
+    );
 
     expect(results).toHaveLength(0);
   } finally {

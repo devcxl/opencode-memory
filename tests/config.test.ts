@@ -185,15 +185,15 @@ test("resolveDtype returns fp32 by default", () => {
 });
 
 test("resolveDtype returns config dtype when valid", () => {
-  const result = resolveDtype(
-    (key: string) => (key === "dtype" ? "q8" : undefined),
+  const result = resolveDtype((key: string) =>
+    key === "dtype" ? "q8" : undefined,
   );
   expect(result).toBe("q8");
 });
 
 test("resolveDtype falls back on invalid config dtype", () => {
-  const result = resolveDtype(
-    (key: string) => (key === "dtype" ? "invalid" : undefined),
+  const result = resolveDtype((key: string) =>
+    key === "dtype" ? "invalid" : undefined,
   );
   expect(result).toBe("fp32");
 });
