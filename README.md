@@ -1,3 +1,5 @@
+<div align="center">
+
 # @devcxl/opencode-memory
 
 [![npm version](https://img.shields.io/npm/v/@devcxl/opencode-memory)](https://www.npmjs.com/package/@devcxl/opencode-memory)
@@ -8,6 +10,8 @@
 [English](./README.md) | [中文](./README.zh.md)
 
 Simple markdown-based memory plugin for OpenCode.
+
+</div>
 
 ## Installation
 
