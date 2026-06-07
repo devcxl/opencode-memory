@@ -5,6 +5,7 @@ import type {
   ListResult,
   SemanticSearchResult,
   MonthGroup,
+  SearchScope,
 } from "../types.js";
 import { embedText } from "../search/embedding.js";
 import {
@@ -71,8 +72,8 @@ export class FileSearcher {
    * 语义搜索：基于向量相似度匹配，支持按时段和项目筛选。
    *
    * 搜索策略：
-   * 1. 先按语义向量获取全局索引的搜索结果
-   * 2. 若指定了 projectId，追加项目级索引的结果并合并排序
+   * 1. 按 scope 决定查询全局索引、项目索引，或两者合并
+   * 2. scope=project 但无 projectId 时降级为全局搜索
    * 3. 为每个结果附加时间戳（用于 period 过滤和展示）
    * 4. period 过滤为宽松前缀匹配（"YYYY-MM" 或 "YYYY"），在向量检索后执行
    */
@@ -81,15 +82,19 @@ export class FileSearcher {
     maxResults: number = 20,
     period?: string,
     projectId?: string | null,
+    scope: SearchScope = "all",
   ): Promise<SemanticSearchResult[]> {
     const queryVector = await embedText(query);
     const module = await import("../search/vector-store.js");
     // period 过滤时先取全部结果（或超大上限），在内存中过滤
     const searchLimit = period ? Number.POSITIVE_INFINITY : maxResults;
-    const results = await module.semanticSearch(queryVector, searchLimit);
+    const includeGlobal = scope !== "project" || !projectId;
+    const results = includeGlobal
+      ? await module.semanticSearch(queryVector, searchLimit)
+      : [];
 
-    // 项目搜索：在项目 store 中独立搜索后与全局合并
-    if (projectId) {
+    // 项目搜索：project scope 只查项目；all scope 与全局合并。
+    if (projectId && scope !== "global") {
       const store = this.getProjectStore(projectId);
       try {
         const projectResults = await store.search(queryVector, searchLimit);

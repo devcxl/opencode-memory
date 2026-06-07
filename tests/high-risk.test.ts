@@ -10,6 +10,7 @@ const upsertCalls: Array<{ filePath: string; chunks: any[] }> = [];
 const projectStoreBasePaths: string[] = [];
 const semanticSearchCalls: number[] = [];
 let semanticResults: any[] = [];
+let projectSemanticResults: any[] = [];
 let currentModelId = "mock-embedding-model";
 let currentDtype = "fp32";
 
@@ -65,7 +66,7 @@ mock.module("../src/search/vector-store.js", () => ({
     }
 
     async search() {
-      return semanticResults;
+      return projectSemanticResults;
     }
 
     async checkExists() {
@@ -94,7 +95,7 @@ mock.module("../src/utils/projectDetector.js", () => ({
 const { MemoryManager } = await import("../src/memory/MemoryManager.js");
 const { FileSearcher } = await import("../src/memory/FileSearcher.js");
 const { handleWrite } = await import("../src/handlers/handleWrite.js");
-const { applyDefaultProject } = await import("../src/utils/defaultProject.js");
+const { resolveProjectId } = await import("../src/utils/defaultProject.js");
 const { MemoryPlugin } = await import("../src/index.js");
 const { gitCommit } = await import("../src/utils/git.js");
 
@@ -104,6 +105,7 @@ beforeEach(() => {
   projectStoreBasePaths.length = 0;
   semanticSearchCalls.length = 0;
   semanticResults = [];
+  projectSemanticResults = [];
   currentModelId = "mock-embedding-model";
   currentDtype = "fp32";
 });
@@ -318,15 +320,16 @@ test("memory writes default to the detected project when project is omitted", as
       const manager = new MemoryManager({ memoryDir });
       await manager.ensureDirectories();
 
+      // resolveProjectId 未指定 scope 时自动检测项目
+      const resolved = resolveProjectId(undefined, "owner/repo");
+      expect(resolved).toBe("owner/repo");
+
       await handleWrite(
-        applyDefaultProject(
-          {
-            action: "write",
-            target: "memory",
-            content: "## Project\ndefault project searchable content",
-          },
-          "owner/repo",
-        ),
+        {
+          target: "memory",
+          project: resolved!,
+          content: "## Project\ndefault project searchable content",
+        },
         manager,
       );
 
@@ -363,6 +366,32 @@ test("memory tool writes default to the detected project when project is omitted
   }
 });
 
+test("memory tool writes to global memory when scope is global", async () => {
+  const { homeDir, memoryDir } = makeTempHome();
+
+  try {
+    await withHome(homeDir, async () => {
+      const hooks = await MemoryPlugin({} as any);
+
+      await hooks.tool!.memory.execute({
+        action: "write",
+        target: "memory",
+        scope: "global",
+        content: "## Global\nplugin global memory content",
+      });
+
+      expect(upsertCalls[0].filePath).toBe(path.join(memoryDir, "MEMORY.md"));
+      expect(
+        fs.existsSync(
+          path.join(memoryDir, "projects", "owner", "repo", "MEMORY.md"),
+        ),
+      ).toBe(false);
+    });
+  } finally {
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  }
+});
+
 test("memory tool reads default to the detected project when project is omitted", async () => {
   const { homeDir, memoryDir } = makeTempHome();
 
@@ -392,19 +421,121 @@ test("memory tool reads default to the detected project when project is omitted"
   }
 });
 
-test("default project helper scopes supported memory actions", () => {
-  expect(
-    applyDefaultProject({ action: "read", target: "memory" }, "owner/repo"),
-  ).toHaveProperty("project", "owner/repo");
-  expect(
-    applyDefaultProject({ action: "write", target: "memory" }, null),
-  ).not.toHaveProperty("project");
-  expect(
-    applyDefaultProject({ action: "edit", target: "memory" }, "owner/repo"),
-  ).not.toHaveProperty("project");
-  expect(
-    applyDefaultProject({ action: "delete", target: "memory" }, "owner/repo"),
-  ).not.toHaveProperty("project");
+test("resolveProjectId handles scope correctly", () => {
+  // scope=project → 返回检测到的 projectId
+  expect(resolveProjectId("project", "owner/repo")).toBe("owner/repo");
+  // scope=project 但检测不到 → null（降级全局）
+  expect(resolveProjectId("project", null)).toBeNull();
+  // scope=global → 强制 null
+  expect(resolveProjectId("global", "owner/repo")).toBeNull();
+  // 未指定 scope → 自动检测
+  expect(resolveProjectId(undefined, "owner/repo")).toBe("owner/repo");
+  expect(resolveProjectId(undefined, null)).toBeNull();
+  // scope=all → 自动检测
+  expect(resolveProjectId("all", "owner/repo")).toBe("owner/repo");
+  // 检测到非法 projectId → 降级全局，不阻断 memory 操作
+  expect(resolveProjectId("project", "../repo")).toBeNull();
+});
+
+test("semantic search with project scope only returns project results", async () => {
+  const { homeDir, memoryDir } = makeTempHome();
+  const dailyDir = path.join(memoryDir, "daily");
+  const globalFile = path.join(memoryDir, "MEMORY.md");
+  const projectFile = path.join(
+    memoryDir,
+    "projects",
+    "owner",
+    "repo",
+    "MEMORY.md",
+  );
+
+  try {
+    fs.mkdirSync(path.dirname(projectFile), { recursive: true });
+    fs.writeFileSync(globalFile, "global searchable content", "utf-8");
+    fs.writeFileSync(projectFile, "project searchable content", "utf-8");
+
+    semanticResults = [
+      {
+        score: 0.99,
+        filePath: globalFile,
+        heading: "",
+        text: "global searchable content",
+      },
+    ];
+    projectSemanticResults = [
+      {
+        score: 0.5,
+        filePath: projectFile,
+        heading: "",
+        text: "project searchable content",
+      },
+    ];
+
+    const searcher = new FileSearcher(
+      memoryDir,
+      dailyDir,
+      (filePath) => fs.readFileSync(filePath, "utf-8"),
+      () =>
+        ({
+          search: async () => projectSemanticResults,
+        }) as any,
+    );
+
+    const results = await searcher.semanticSearch(
+      "searchable",
+      20,
+      undefined,
+      "owner/repo",
+      "project",
+    );
+
+    expect(results).toHaveLength(1);
+    expect(results[0].filePath).toBe(projectFile);
+  } finally {
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  }
+});
+
+test("semantic search with project scope falls back to global without project id", async () => {
+  const { homeDir, memoryDir } = makeTempHome();
+  const dailyDir = path.join(memoryDir, "daily");
+  const globalFile = path.join(memoryDir, "MEMORY.md");
+
+  try {
+    fs.mkdirSync(memoryDir, { recursive: true });
+    fs.writeFileSync(globalFile, "global searchable content", "utf-8");
+
+    semanticResults = [
+      {
+        score: 0.99,
+        filePath: globalFile,
+        heading: "",
+        text: "global searchable content",
+      },
+    ];
+
+    const searcher = new FileSearcher(
+      memoryDir,
+      dailyDir,
+      (filePath) => fs.readFileSync(filePath, "utf-8"),
+      () => {
+        throw new Error("project store should not be used");
+      },
+    );
+
+    const results = await searcher.semanticSearch(
+      "searchable",
+      20,
+      undefined,
+      null,
+      "project",
+    );
+
+    expect(results).toHaveLength(1);
+    expect(results[0].filePath).toBe(globalFile);
+  } finally {
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  }
 });
 
 test("semantic search filters by the matched chunk timestamp", async () => {

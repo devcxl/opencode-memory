@@ -1,4 +1,5 @@
 import type { MemoryManager } from "../memory/MemoryManager.js";
+import type { SearchScope } from "../types.js";
 import { validateScope } from "../utils/validation.js";
 
 /**
@@ -30,20 +31,23 @@ export async function handleSearch(
     validateScope(scope);
   }
 
+  const searchScope = (scope ?? "all") as SearchScope;
+
   const effectiveProjectId =
-    scope === "project" ? projectId : scope === "global" ? null : projectId;
+    searchScope === "project"
+      ? projectId
+      : searchScope === "global"
+        ? null
+        : projectId;
 
   try {
     const results = await memoryManager.semanticSearch(
       query,
       max_results ?? 20,
       period,
-      scope === "project" ? projectId : effectiveProjectId,
+      searchScope === "project" ? projectId : effectiveProjectId,
+      searchScope,
     );
-
-    if (scope === "project" && !projectId) {
-      return "No current project detected. Use --scope all or --scope global instead.";
-    }
 
     if (results.length === 0) {
       const periodMsg = period ? ` (filtered by period: ${period})` : "";
