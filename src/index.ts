@@ -5,7 +5,7 @@ import { MemoryManager } from "./memory/MemoryManager.js";
 import { BootstrapManager } from "./memory/BootstrapManager.js";
 import { detectProject } from "./utils/projectDetector.js";
 import {
-  MEMORY_AWARENESS_INSTRUCTIONS,
+  getMemoryAwarenessInstructions,
   BOOTSTRAP_INSTRUCTIONS,
 } from "./instructions/memoryInstructions.js";
 import { validateAction } from "./utils/validation.js";
@@ -76,7 +76,7 @@ export const MemoryPlugin: Plugin = async (ctx: PluginInput) => {
     if (bootstrapManager.isBootstrapNeeded()) {
       return BOOTSTRAP_INSTRUCTIONS;
     }
-    return MEMORY_AWARENESS_INSTRUCTIONS;
+    return getMemoryAwarenessInstructions();
   };
 
   return {

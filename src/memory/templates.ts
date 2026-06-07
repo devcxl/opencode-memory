@@ -1,4 +1,4 @@
-import { MEMORY_AWARENESS_INSTRUCTIONS } from "../instructions/memoryInstructions.js";
+import { getMemoryAwarenessInstructions } from "../instructions/memoryInstructions.js";
 
 export const BOOTSTRAP_TEMPLATE = (
   bootstrapPath: string,
@@ -46,7 +46,7 @@ Once you've collected all the information:
 Be conversational and natural. Don't overwhelm with all questions at once.
 
 ---
-${MEMORY_AWARENESS_INSTRUCTIONS.trim()}
+${getMemoryAwarenessInstructions().trim()}
 `;
 
 export const MEMORY_TEMPLATE = `# MEMORY.md - Long-Term Memory
