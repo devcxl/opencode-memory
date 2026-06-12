@@ -269,6 +269,41 @@ test("gitCommit does not include unrelated staged changes in the memory commit",
   }
 });
 
+test("gitCommit with extraPaths stages and commits index files alongside the memory file", async () => {
+  const { homeDir, memoryDir } = makeTempHome();
+  const repoDir = path.dirname(memoryDir);
+
+  try {
+    fs.mkdirSync(repoDir, { recursive: true });
+    git(["init"], repoDir);
+    git(["config", "user.name", "Test"], repoDir);
+    git(["config", "user.email", "test@example.com"], repoDir);
+
+    const memoryFile = path.join(memoryDir, "MEMORY.md");
+    fs.writeFileSync(memoryFile, "memory content\n", "utf-8");
+
+    const indexPath = path.join(memoryDir, "root.index");
+    fs.mkdirSync(indexPath, { recursive: true });
+    fs.writeFileSync(path.join(indexPath, "data.json"), '{"items":[]}', "utf-8");
+
+    await withHome(homeDir, async () => {
+      await gitCommit("Update MEMORY.md", memoryFile, memoryDir, [indexPath]);
+    });
+
+    const committedFiles = git(
+      ["show", "--name-only", "--pretty=format:", "HEAD"],
+      repoDir,
+    )
+      .trim()
+      .split("\n")
+      .filter(Boolean);
+    expect(committedFiles).toContain("memory/MEMORY.md");
+    expect(committedFiles).toContain("memory/root.index/data.json");
+  } finally {
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  }
+});
+
 test("project memory rejects path traversal project ids", () => {
   const { homeDir, memoryDir } = makeTempHome();
 

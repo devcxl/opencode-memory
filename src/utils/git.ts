@@ -54,6 +54,7 @@ export async function gitCommit(
   operation: string,
   filePath: string,
   memoryDir: string = getMemoryDir(),
+  extraPaths: string[] = [],
 ): Promise<void> {
   await ensureGitRepo(memoryDir);
 
@@ -81,8 +82,24 @@ export async function gitCommit(
       return;
     }
 
-    await $`git add -- ${relativePath}`.cwd(repoRoot).quiet();
-    const status = await $`git status --porcelain -- ${relativePath}`
+    // 收集所有需要 stage 的路径：主文件 + 索引文件
+    const allPaths = [relativePath];
+    for (const extra of extraPaths) {
+      const relExtra = path.relative(repoRoot, extra);
+      if (
+        relExtra !== ".." &&
+        !relExtra.startsWith(`..${path.sep}`) &&
+        !path.isAbsolute(relExtra)
+      ) {
+        allPaths.push(relExtra);
+      }
+    }
+
+    // 一次性 stage 所有路径
+    await $`git add ${allPaths}`.cwd(repoRoot).quiet();
+
+    // 检查是否有变更（只看主文件，避免因索引文件变更而提交空内容）
+    const status = await $`git status --porcelain ${allPaths}`
       .cwd(repoRoot)
       .text();
 
@@ -91,9 +108,7 @@ export async function gitCommit(
       return;
     }
 
-    await $`git commit -m ${operation} -- ${relativePath}`
-      .cwd(repoRoot)
-      .quiet();
+    await $`git commit -m ${operation} ${allPaths}`.cwd(repoRoot).quiet();
   } catch (err) {
     const errorMessage = (err as Error).message;
     if (!errorMessage.includes("nothing to commit")) {

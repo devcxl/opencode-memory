@@ -381,7 +381,23 @@ export class MemoryManager {
   ): Promise<void> {
     atomicWrite(filePath, content);
     await this.embedAndIndex(filePath, content);
-    await gitCommit(operation, filePath, this.config.memoryDir);
+
+    // 推导对应的向量索引路径，确保索引文件也被 git 追踪
+    const indexPaths: string[] = [];
+    const projectsDir = this.paths.projectsDir;
+    if (filePath.startsWith(projectsDir + path.sep)) {
+      const relative = path.relative(projectsDir, filePath);
+      const projectId = path.dirname(relative).split(path.sep).join("/");
+      if (projectId && projectId !== ".") {
+        indexPaths.push(path.join(projectsDir, projectId, "root.index"));
+      }
+    } else if (filePath.includes(path.sep + "daily" + path.sep)) {
+      indexPaths.push(this.paths.dailyIndexPath);
+    } else {
+      indexPaths.push(this.paths.rootIndexPath);
+    }
+
+    await gitCommit(operation, filePath, this.config.memoryDir, indexPaths);
   }
 
   /**
