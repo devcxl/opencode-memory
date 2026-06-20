@@ -95,11 +95,40 @@ export async function gitCommit(
       }
     }
 
-    // 一次性 stage 所有路径
-    await $`git add ${allPaths}`.cwd(repoRoot).quiet();
+    // 过滤不存在的文件（如 embedding 引擎未初始化时索引文件未被创建）
+    const existingPaths = allPaths.filter((p) =>
+      fs.existsSync(path.join(repoRoot, p)),
+    );
 
-    // 检查是否有变更（只看主文件，避免因索引文件变更而提交空内容）
-    const status = await $`git status --porcelain ${allPaths}`
+    if (existingPaths.length === 0) {
+      return;
+    }
+
+    // 过滤被 .gitignore 忽略的路径（如 daily.index 目录），避免 git add 失败
+    const pathsToStage: string[] = [];
+    for (const p of existingPaths) {
+      try {
+        const ignored = await $`git check-ignore -q ${p}`
+          .cwd(repoRoot)
+          .quiet()
+          .nothrow();
+        if (ignored.exitCode !== 0) {
+          pathsToStage.push(p);
+        }
+      } catch {
+        pathsToStage.push(p);
+      }
+    }
+
+    if (pathsToStage.length === 0) {
+      return;
+    }
+
+    // 一次性 stage 所有路径
+    await $`git add ${pathsToStage}`.cwd(repoRoot).quiet();
+
+    // 检查是否有变更
+    const status = await $`git status --porcelain ${pathsToStage}`
       .cwd(repoRoot)
       .text();
 
@@ -108,7 +137,7 @@ export async function gitCommit(
       return;
     }
 
-    await $`git commit -m ${operation} ${allPaths}`.cwd(repoRoot).quiet();
+    await $`git commit -m ${operation} ${pathsToStage}`.cwd(repoRoot).quiet();
   } catch (err) {
     const errorMessage = (err as Error).message;
     if (!errorMessage.includes("nothing to commit")) {
