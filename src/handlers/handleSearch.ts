@@ -44,9 +44,11 @@ export async function handleSearch(
     const scopeInfo =
       searchScope === "global"
         ? "[scope: global]"
-        : projectId
-          ? `[scope: project/${projectId}]`
-          : "[scope: all]";
+        : searchScope === "project" && !projectId
+          ? "[scope: global] (no project detected, fallback)"
+          : projectId
+            ? `[scope: project/${projectId}]`
+            : "[scope: all]";
 
     const results = await memoryManager.semanticSearch(
       query,

@@ -204,7 +204,7 @@ export const MemoryPlugin: Plugin = async (ctx: PluginInput) => {
           "- `write`: Write to a memory file. **DEFAULT to daily** for task summaries. Use memory target for knowledge worth retaining across sessions.",
           "- `edit`: Edit a specific part of memory/identity/user/daily file. AI must read file first to get exact oldString.",
           "- `delete`: Delete entries from a memory file by exact timestamp (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS)",
-          "- `search`: Semantic search across all memory files. Use `period` filter to narrow results.",
+          "- `search`: Semantic search across memory files. Defaults to project+global (`all`) in project context, global-only otherwise. Use `scope: 'project'` or `scope: 'global'` to restrict range. Use `period` to filter by month.",
           "- `list`: List memory files grouped by month. Use `period` filter for detailed view.",
           "",
           "**Targets:**",
@@ -275,7 +275,7 @@ export const MemoryPlugin: Plugin = async (ctx: PluginInput) => {
             .enum(["all", "global", "project"])
             .optional()
             .describe(
-              "Scope for memory operations: 'global' (global only), 'project' (auto-detect current project, fallback to global), 'all' (search both). Default: auto-detect.",
+              "Scope for memory operations: 'global' (global only), 'project' (current project only), 'all' (search both, default for search). Write/read default to auto-detect current project, fallback to global.",
             ),
         },
         async execute(args) {
@@ -306,7 +306,16 @@ export const MemoryPlugin: Plugin = async (ctx: PluginInput) => {
                 memoryManager,
               );
             case "search":
-              return handleSearch(args, memoryManager, resolvedProject);
+              // 搜索作用域与 resolveProjectId 保持一致：
+              // 当 args.scope 未指定时，优先项目上下文；检测不到项目则只搜全局
+              return handleSearch(
+                {
+                  ...args,
+                  scope: args.scope ?? (resolvedProject ? "all" : "global"),
+                },
+                memoryManager,
+                resolvedProject,
+              );
             case "list":
               return handleList(args, memoryManager);
             default:
