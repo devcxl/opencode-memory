@@ -41,7 +41,10 @@ export async function handleEdit(
     );
     await memoryManager.editFile(filePath, oldString, newString);
     const timestamp = memoryManager.getLocalTimestamp();
-    return `Edited ${displayName}\n\nTimestamp: ${timestamp}`;
+    const scopeTag = project
+      ? `[scope: project/${project}]`
+      : `[scope: global]`;
+    return `${scopeTag} Edited ${displayName}\n\nTimestamp: ${timestamp}`;
   } catch (error) {
     return toErrorMessage(error, `Failed to edit ${target}`);
   }

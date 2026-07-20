@@ -26,11 +26,14 @@ export function handleRead(
       date,
       project || undefined,
     );
+    const scopeTag = project
+      ? `[scope: project/${project}]`
+      : `[scope: global]`;
     const content = memoryManager.readFile(filePath);
     if (!content) {
-      return `${displayName} not found or empty.`;
+      return `${scopeTag} ${displayName} not found or empty.`;
     }
-    return content;
+    return `${scopeTag}\n\n${content}`;
   } catch (error) {
     return toErrorMessage(error, `Unknown target: ${target}`);
   }

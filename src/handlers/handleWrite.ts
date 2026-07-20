@@ -34,7 +34,7 @@ export async function handleWrite(
   validateTarget(target);
   validateContent(content);
 
-  if (project && target === "memory") {
+  if (project && (target === "memory" || target === "daily")) {
     memoryManager.ensureProjectDirs(project);
   }
 
@@ -53,6 +53,10 @@ export async function handleWrite(
       await memoryManager.appendFile(filePath, content);
     }
 
+    const scopeTag = project
+      ? `[scope: project/${project}]`
+      : `[scope: global]`;
+
     const reflectionPrompt = [
       "",
       "[REFLECTION TRIGGERED]",
@@ -63,7 +67,7 @@ export async function handleWrite(
       "4. How does this connect to previous memories?",
     ].join("\n");
 
-    return `${mode === "overwrite" ? "Wrote to" : "Appended to"} ${displayName}.${reflectionPrompt}\n\nTimestamp: ${timestamp}`;
+    return `${scopeTag} ${mode === "overwrite" ? "Wrote to" : "Appended to"} ${displayName}.${reflectionPrompt}\n\nTimestamp: ${timestamp}`;
   } catch (error) {
     return toErrorMessage(error, `Unknown target: ${target}`);
   }

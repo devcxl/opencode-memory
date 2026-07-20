@@ -45,6 +45,11 @@ export class MemoryPaths {
     return path.join(this.projectDir(projectId), "MEMORY.md");
   }
 
+  /** 获取项目级 daily 日志路径 */
+  projectDailyPath(projectId: string, date: string): string {
+    return path.join(this.projectDir(projectId), "daily", `${date}.md`);
+  }
+
   get rootIndexPath(): string {
     return path.join(this.memoryDir, "root.index");
   }

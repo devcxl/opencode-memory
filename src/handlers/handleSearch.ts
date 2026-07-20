@@ -41,6 +41,13 @@ export async function handleSearch(
         : projectId;
 
   try {
+    const scopeInfo =
+      searchScope === "global"
+        ? "[scope: global]"
+        : projectId
+          ? `[scope: project/${projectId}]`
+          : "[scope: all]";
+
     const results = await memoryManager.semanticSearch(
       query,
       max_results ?? 20,
@@ -51,7 +58,7 @@ export async function handleSearch(
 
     if (results.length === 0) {
       const periodMsg = period ? ` (filtered by period: ${period})` : "";
-      return `No results for "${query}"${periodMsg}.`;
+      return `${scopeInfo} No results for "${query}"${periodMsg}.`;
     }
 
     const output = results
@@ -63,7 +70,7 @@ export async function handleSearch(
       .join("\n\n");
 
     const periodMsg = period ? ` (filtered by period: ${period})` : "";
-    return `Found ${results.length} results${periodMsg}:\n\n${output}`;
+    return `${scopeInfo} Found ${results.length} results${periodMsg}:\n\n${output}`;
   } catch (error) {
     throw error;
   }
