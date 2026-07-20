@@ -39,7 +39,10 @@ export async function handleDelete(
       date,
       project || undefined,
     );
-    return `${result}\n\nDeleted timestamp: ${timestamp}`;
+    const scopeTag = project
+      ? `[scope: project/${project}]`
+      : `[scope: global]`;
+    return `${scopeTag} ${result}\n\nDeleted timestamp: ${timestamp}`;
   } catch (error) {
     return toErrorMessage(error, `Failed to delete from ${target}`);
   }

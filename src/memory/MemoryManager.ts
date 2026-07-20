@@ -169,6 +169,12 @@ export class MemoryManager {
         return { filePath: this.getUserPath(), displayName: "USER.md" };
       case "daily": {
         const targetDate = normalizeDailyDate(date) ?? this.todayStr();
+        if (project) {
+          return {
+            filePath: this.paths.projectDailyPath(project, targetDate),
+            displayName: `projects/${project}/daily/${targetDate}.md`,
+          };
+        }
         return {
           filePath: this.getDailyPath(targetDate),
           displayName: `daily/${targetDate}.md`,
@@ -312,6 +318,36 @@ export class MemoryManager {
   }
 
   /**
+   * 从 projects/ 子目录下的文件路径中提取 projectId。
+   *
+   * 例：
+   *   projects/owner/repo/MEMORY.md       → "owner/repo"
+   *   projects/owner/repo/daily/file.md   → "owner/repo"
+   *   projects/myproject/MEMORY.md        → "myproject"
+   *   projects/myproject/daily/file.md    → "myproject"
+   *
+   * 通过定位 daily/ 子目录判断项目根边界，
+   * 若路径不含 daily/ 则取文件的父目录为 projectId。
+   */
+  private extractProjectId(filePath: string): string | null {
+    const projectsDir = this.paths.projectsDir;
+    if (!filePath.startsWith(projectsDir + path.sep)) return null;
+
+    const relative = path.relative(projectsDir, filePath);
+    const segments = relative.split(path.sep);
+
+    // 检查是否包含 daily/ 子目录
+    const dailyIdx = segments.indexOf("daily");
+    if (dailyIdx > 0 && dailyIdx < segments.length - 1) {
+      // daily/ 之前的 segments 构成 projectId
+      return segments.slice(0, dailyIdx).join("/");
+    }
+
+    // 不含 daily/，取文件父目录
+    return segments.slice(0, -1).join("/");
+  }
+
+  /**
    * 将文件内容分块、向量化并写入向量存储，供语义搜索使用。
    *
    * 路由规则：
@@ -346,17 +382,11 @@ export class MemoryManager {
         })),
       );
 
-      const projectsDir = this.paths.projectsDir;
-      // 判断是否属于项目文件：路径以 projects/ 开头
-      if (filePath.startsWith(projectsDir + path.sep)) {
-        const relative = path.relative(projectsDir, filePath);
-        // projectId 取 projects/ 后的第一级目录名
-        const projectId = path.dirname(relative).split(path.sep).join("/");
-        if (projectId && projectId !== ".") {
-          const store = this.getProjectStore(projectId);
-          await store.upsertFile(filePath, embedded);
-          return;
-        }
+      const projectId = this.extractProjectId(filePath);
+      if (projectId) {
+        const store = this.getProjectStore(projectId);
+        await store.upsertFile(filePath, embedded);
+        return;
       }
 
       // 非项目文件写入全局索引（root/daily 由 upsertFile 内部按路径区分）
@@ -384,13 +414,11 @@ export class MemoryManager {
 
     // 推导对应的向量索引路径，确保索引文件也被 git 追踪
     const indexPaths: string[] = [];
-    const projectsDir = this.paths.projectsDir;
-    if (filePath.startsWith(projectsDir + path.sep)) {
-      const relative = path.relative(projectsDir, filePath);
-      const projectId = path.dirname(relative).split(path.sep).join("/");
-      if (projectId && projectId !== ".") {
-        indexPaths.push(path.join(projectsDir, projectId, "root.index"));
-      }
+    const projectId = this.extractProjectId(filePath);
+    if (projectId) {
+      indexPaths.push(
+        path.join(this.paths.projectsDir, projectId, "root.index"),
+      );
     } else if (filePath.includes(path.sep + "daily" + path.sep)) {
       indexPaths.push(this.paths.dailyIndexPath);
     } else {

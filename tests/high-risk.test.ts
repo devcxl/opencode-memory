@@ -97,6 +97,10 @@ mock.module("../src/utils/projectDetector.js", () => ({
 const { MemoryManager } = await import("../src/memory/MemoryManager.js");
 const { FileSearcher } = await import("../src/memory/FileSearcher.js");
 const { handleWrite } = await import("../src/handlers/handleWrite.js");
+const { handleRead } = await import("../src/handlers/handleRead.js");
+const { handleEdit } = await import("../src/handlers/handleEdit.js");
+const { handleDelete } = await import("../src/handlers/handleDelete.js");
+const { handleSearch } = await import("../src/handlers/handleSearch.js");
 const { resolveProjectId } = await import("../src/utils/defaultProject.js");
 const { MemoryPlugin } = await import("../src/index.js");
 const { gitCommit } = await import("../src/utils/git.js");
@@ -448,7 +452,8 @@ test("memory tool reads default to the detected project when project is omitted"
       target: "memory",
     });
 
-    expect(result).toBe("project content");
+    expect(result).toStartWith("[scope: project/owner/repo]");
+    expect(result).toContain("project content");
   });
 });
 
@@ -768,4 +773,359 @@ test("semantic search does not bind a cross-entry legacy chunk to the first time
   } finally {
     fs.rmSync(homeDir, { recursive: true, force: true });
   }
+});
+
+// =============================================================================
+// L1: Scope 标签测试
+// =============================================================================
+
+test("handleWrite returns [scope: project/...] when project is set", async () => {
+  await withTempMemory(async (memoryDir) => {
+    const manager = new MemoryManager({ memoryDir });
+    await manager.ensureDirectories();
+
+    const result = await handleWrite(
+      {
+        target: "memory",
+        project: "owner/repo",
+        content: "project content",
+      },
+      manager,
+    );
+
+    expect(result).toStartWith("[scope: project/owner/repo] ");
+  });
+});
+
+test("handleWrite returns [scope: global] when project is not set", async () => {
+  await withTempMemory(async (memoryDir) => {
+    const manager = new MemoryManager({ memoryDir });
+    await manager.ensureDirectories();
+
+    const result = await handleWrite(
+      {
+        target: "memory",
+        content: "global content",
+      },
+      manager,
+    );
+
+    expect(result).toStartWith("[scope: global] ");
+  });
+});
+
+test("handleWrite returns [scope: global] for daily without project", async () => {
+  await withTempMemory(async (memoryDir) => {
+    const manager = new MemoryManager({ memoryDir });
+    await manager.ensureDirectories();
+
+    const result = await handleWrite(
+      {
+        target: "daily",
+        date: "2026-07-20",
+        content: "## Entry\nsome daily content",
+      },
+      manager,
+    );
+
+    expect(result).toStartWith("[scope: global] ");
+  });
+});
+
+test("handleWrite returns [scope: project/...] for daily with project", async () => {
+  await withTempMemory(async (memoryDir) => {
+    const manager = new MemoryManager({ memoryDir });
+    await manager.ensureDirectories();
+
+    const result = await handleWrite(
+      {
+        target: "daily",
+        date: "2026-07-20",
+        project: "owner/repo",
+        content: "## Entry\nproject daily content",
+      },
+      manager,
+    );
+
+    expect(result).toStartWith("[scope: project/owner/repo] ");
+  });
+});
+
+test("handleRead returns [scope: project/...] prefix", async () => {
+  await withTempMemory(async (memoryDir) => {
+    const manager = new MemoryManager({ memoryDir });
+    await manager.ensureDirectories();
+
+    const projectMemoryPath = path.join(
+      memoryDir,
+      "projects",
+      "owner",
+      "repo",
+      "MEMORY.md",
+    );
+    fs.mkdirSync(path.dirname(projectMemoryPath), { recursive: true });
+    fs.writeFileSync(projectMemoryPath, "project content", "utf-8");
+
+    const result = handleRead(
+      { target: "memory", project: "owner/repo" },
+      manager,
+    );
+
+    expect(result).toStartWith("[scope: project/owner/repo]");
+  });
+});
+
+test("handleRead returns [scope: global] prefix without project", async () => {
+  await withTempMemory(async (memoryDir) => {
+    const manager = new MemoryManager({ memoryDir });
+    await manager.ensureDirectories();
+
+    fs.writeFileSync(
+      path.join(memoryDir, "MEMORY.md"),
+      "global content",
+      "utf-8",
+    );
+
+    const result = handleRead({ target: "memory" }, manager);
+
+    expect(result).toStartWith("[scope: global]");
+  });
+});
+
+test("handleEdit returns [scope: ...] prefix", async () => {
+  await withTempMemory(async (memoryDir) => {
+    const manager = new MemoryManager({ memoryDir });
+    await manager.ensureDirectories();
+
+    const filePath = path.join(memoryDir, "MEMORY.md");
+    fs.writeFileSync(filePath, "original content", "utf-8");
+
+    // 测试 global
+    const globalResult = await handleEdit(
+      {
+        target: "memory",
+        oldString: "original content",
+        newString: "updated global",
+      },
+      manager,
+    );
+    expect(globalResult).toStartWith("[scope: global] ");
+
+    // 测试 project
+    const projPath = path.join(
+      memoryDir,
+      "projects",
+      "owner",
+      "repo",
+      "MEMORY.md",
+    );
+    fs.mkdirSync(path.dirname(projPath), { recursive: true });
+    fs.writeFileSync(projPath, "project original", "utf-8");
+
+    const projResult = await handleEdit(
+      {
+        target: "memory",
+        project: "owner/repo",
+        oldString: "project original",
+        newString: "project updated",
+      },
+      manager,
+    );
+    expect(projResult).toStartWith("[scope: project/owner/repo] ");
+  });
+});
+
+test("handleDelete returns [scope: ...] prefix", async () => {
+  await withTempMemory(async (memoryDir) => {
+    const manager = new MemoryManager({ memoryDir });
+    await manager.ensureDirectories();
+
+    const filePath = path.join(memoryDir, "MEMORY.md");
+    fs.writeFileSync(
+      filePath,
+      "<!-- 2026-07-20 10:00:00 -->\nglobal content",
+      "utf-8",
+    );
+
+    const result = await handleDelete(
+      {
+        target: "memory",
+        timestamp: "2026-07-20 10:00:00",
+      },
+      manager,
+    );
+
+    expect(result).toStartWith("[scope: global] ");
+  });
+});
+
+test("handleSearch returns [scope: ...] info", async () => {
+  await withTempMemory(async (memoryDir) => {
+    const manager = new MemoryManager({ memoryDir });
+    await manager.ensureDirectories();
+
+    fs.writeFileSync(
+      path.join(memoryDir, "MEMORY.md"),
+      "searchable content",
+      "utf-8",
+    );
+
+    semanticResults = [
+      {
+        score: 0.99,
+        filePath: path.join(memoryDir, "MEMORY.md"),
+        heading: "",
+        text: "searchable content",
+      },
+    ];
+
+    const result = await handleSearch(
+      { query: "searchable", scope: "global" },
+      manager,
+      null,
+    );
+
+    expect(result).toStartWith("[scope: global] ");
+  });
+});
+
+// =============================================================================
+// L3: 项目级 daily 日志测试
+// =============================================================================
+
+test("getPathForTarget daily with project routes to project daily dir", () => {
+  const { memoryDir } = makeTempHome();
+
+  try {
+    const manager = new MemoryManager({ memoryDir });
+    const { filePath, displayName } = manager.getPathForTarget(
+      "daily",
+      "2026-07-20",
+      "owner/repo",
+    );
+
+    expect(filePath).toBe(
+      path.join(memoryDir, "projects", "owner", "repo", "daily", "2026-07-20.md"),
+    );
+    expect(displayName).toBe("projects/owner/repo/daily/2026-07-20.md");
+  } finally {
+    fs.rmSync(path.dirname(memoryDir), { recursive: true, force: true });
+  }
+});
+
+test("getPathForTarget daily without project keeps global path", () => {
+  const { memoryDir } = makeTempHome();
+
+  try {
+    const manager = new MemoryManager({ memoryDir });
+    const { filePath, displayName } = manager.getPathForTarget(
+      "daily",
+      "2026-07-20",
+    );
+
+    expect(filePath).toBe(path.join(memoryDir, "daily", "2026-07-20.md"));
+    expect(displayName).toBe("daily/2026-07-20.md");
+  } finally {
+    fs.rmSync(path.dirname(memoryDir), { recursive: true, force: true });
+  }
+});
+
+test("project daily write creates file in project daily directory", async () => {
+  await withTempMemory(async (memoryDir) => {
+    const manager = new MemoryManager({ memoryDir });
+    await manager.ensureDirectories();
+
+    await handleWrite(
+      {
+        target: "daily",
+        date: "2026-07-20",
+        project: "owner/repo",
+        content: "## Entry\nproject daily content",
+      },
+      manager,
+    );
+
+    const expectedPath = path.join(
+      memoryDir,
+      "projects",
+      "owner",
+      "repo",
+      "daily",
+      "2026-07-20.md",
+    );
+    expect(fs.existsSync(expectedPath)).toBe(true);
+    expect(upsertCalls[0].filePath).toBe(expectedPath);
+  });
+});
+
+test("project daily indexes into project store", async () => {
+  await withTempMemory(async (memoryDir) => {
+    const manager = new MemoryManager({ memoryDir });
+    await manager.ensureDirectories();
+
+    await handleWrite(
+      {
+        target: "daily",
+        date: "2026-07-20",
+        project: "owner/repo",
+        content: "## Entry\nproject daily content for indexing",
+      },
+      manager,
+    );
+
+    // ProjectStore 的 basePath 应该是项目目录
+    expect(projectStoreBasePaths).toContain(
+      path.join(memoryDir, "projects", "owner", "repo"),
+    );
+  });
+});
+
+test("global daily is unaffected by project daily changes", async () => {
+  await withTempMemory(async (memoryDir) => {
+    const manager = new MemoryManager({ memoryDir });
+    await manager.ensureDirectories();
+
+    // 写入全局 daily
+    await handleWrite(
+      {
+        target: "daily",
+        date: "2026-07-20",
+        content: "## Entry\nglobal daily content",
+      },
+      manager,
+    );
+
+    const globalPath = path.join(memoryDir, "daily", "2026-07-20.md");
+    expect(fs.existsSync(globalPath)).toBe(true);
+
+    // 重置 upsertCalls 便于检查
+    upsertCalls.length = 0;
+
+    // 写入项目 daily
+    await handleWrite(
+      {
+        target: "daily",
+        date: "2026-07-20",
+        project: "owner/repo",
+        content: "## Entry\nproject daily content",
+      },
+      manager,
+    );
+
+    const projectPath = path.join(
+      memoryDir,
+      "projects",
+      "owner",
+      "repo",
+      "daily",
+      "2026-07-20.md",
+    );
+    expect(fs.existsSync(projectPath)).toBe(true);
+
+    // 两个文件应该独立存在
+    const globalContent = fs.readFileSync(globalPath, "utf-8");
+    const projectContent = fs.readFileSync(projectPath, "utf-8");
+    expect(globalContent).toContain("global daily content");
+    expect(projectContent).toContain("project daily content");
+  });
 });
