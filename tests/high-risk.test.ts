@@ -482,6 +482,19 @@ test("resolveProjectId handles scope correctly", () => {
   expect(resolveProjectId("project", "../repo")).toBeNull();
 });
 
+// 创建 mock IFileStorageProvider，适配 FileSearcher 的新接口
+function makeMockFileStorage(): { readFile: (filePath: string) => Promise<string | null> } {
+  return {
+    readFile: async (filePath: string) => {
+      try {
+        return fs.readFileSync(filePath, "utf-8");
+      } catch {
+        return null;
+      }
+    },
+  };
+}
+
 test("semantic search with project scope only returns project results", async () => {
   const { homeDir, memoryDir } = makeTempHome();
   const dailyDir = path.join(memoryDir, "daily");
@@ -516,10 +529,11 @@ test("semantic search with project scope only returns project results", async ()
       },
     ];
 
+    const fileStorage = makeMockFileStorage();
     const searcher = new FileSearcher(
       memoryDir,
       dailyDir,
-      (filePath) => fs.readFileSync(filePath, "utf-8"),
+      fileStorage as any,
       () =>
         ({
           search: async () => projectSemanticResults,
@@ -559,10 +573,11 @@ test("semantic search with project scope falls back to global without project id
       },
     ];
 
+    const fileStorage = makeMockFileStorage();
     const searcher = new FileSearcher(
       memoryDir,
       dailyDir,
-      (filePath) => fs.readFileSync(filePath, "utf-8"),
+      fileStorage as any,
       () => {
         throw new Error("project store should not be used");
       },
@@ -612,10 +627,11 @@ test("semantic search filters by the matched chunk timestamp", async () => {
       },
     ];
 
+    const fileStorage2 = makeMockFileStorage();
     const searcher = new FileSearcher(
       memoryDir,
       dailyDir,
-      (filePath) => fs.readFileSync(filePath, "utf-8"),
+      fileStorage2 as any,
       () => {
         throw new Error("project store should not be used");
       },
@@ -661,10 +677,11 @@ test("semantic search filters after enough results are retrieved for period", as
       },
     ];
 
+    const fileStorage3 = makeMockFileStorage();
     const searcher = new FileSearcher(
       memoryDir,
       dailyDir,
-      (filePath) => fs.readFileSync(filePath, "utf-8"),
+      fileStorage3 as any,
       () => {
         throw new Error("project store should not be used");
       },
@@ -712,10 +729,11 @@ test("semantic search does not fallback to the first timestamp when multiple ent
       },
     ];
 
+    const fileStorage4 = makeMockFileStorage();
     const searcher = new FileSearcher(
       memoryDir,
       dailyDir,
-      (filePath) => fs.readFileSync(filePath, "utf-8"),
+      fileStorage4 as any,
       () => {
         throw new Error("project store should not be used");
       },
@@ -762,10 +780,11 @@ test("semantic search does not bind a cross-entry legacy chunk to the first time
       },
     ];
 
+    const fileStorage5 = makeMockFileStorage();
     const searcher = new FileSearcher(
       memoryDir,
       dailyDir,
-      (filePath) => fs.readFileSync(filePath, "utf-8"),
+      fileStorage5 as any,
       () => {
         throw new Error("project store should not be used");
       },
@@ -875,7 +894,7 @@ test("handleRead returns [scope: project/...] prefix", async () => {
     fs.mkdirSync(path.dirname(projectMemoryPath), { recursive: true });
     fs.writeFileSync(projectMemoryPath, "project content", "utf-8");
 
-    const result = handleRead(
+    const result = await handleRead(
       { target: "memory", project: "owner/repo" },
       manager,
     );
@@ -895,7 +914,7 @@ test("handleRead returns [scope: global] prefix without project", async () => {
       "utf-8",
     );
 
-    const result = handleRead({ target: "memory" }, manager);
+    const result = await handleRead({ target: "memory" }, manager);
 
     expect(result).toStartWith("[scope: global]");
   });

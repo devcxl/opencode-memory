@@ -58,11 +58,7 @@ export class LocalFileStorageProvider implements IFileStorageProvider {
    * 递归遍历目录，收集匹配 pattern 的文件路径。
    * pattern 为简单子串匹配（非 glob/regex）。
    */
-  private walkDir(
-    dir: string,
-    pattern: string,
-    results: string[],
-  ): void {
+  private walkDir(dir: string, pattern: string, results: string[]): void {
     let entries: fs.Dirent[];
     try {
       entries = fs.readdirSync(dir, { withFileTypes: true });

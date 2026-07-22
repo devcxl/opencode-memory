@@ -81,9 +81,11 @@ export function loadConfig(): MemoryConfig {
 
   // 环境变量覆盖：OPM_MODE > opencode.json > 默认 "local"
   const effectiveMode: "local" | "remote" =
-    process.env.OPM_MODE === "remote" ? "remote"
-    : configMode === "remote" ? "remote"
-    : "local";
+    process.env.OPM_MODE === "remote"
+      ? "remote"
+      : configMode === "remote"
+        ? "remote"
+        : "local";
 
   const config: MemoryConfig = { memoryDir, mode: effectiveMode };
 

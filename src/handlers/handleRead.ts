@@ -10,10 +10,10 @@ import { toErrorMessage } from "../utils/fs.js";
  * @param memoryManager - MemoryManager 实例
  * @returns 文件内容字符串，或错误提示
  */
-export function handleRead(
+export async function handleRead(
   params: { target?: string; date?: string; project?: string },
   memoryManager: MemoryManager,
-): string {
+): Promise<string> {
   const { target, date, project } = params;
 
   if (!target) {
@@ -29,7 +29,7 @@ export function handleRead(
     const scopeTag = project
       ? `[scope: project/${project}]`
       : `[scope: global]`;
-    const content = memoryManager.readFile(filePath);
+    const content = await memoryManager.readFile(filePath);
     if (!content) {
       return `${scopeTag} ${displayName} not found or empty.`;
     }

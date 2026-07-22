@@ -69,16 +69,17 @@ export class MemoryClient {
   /** 统一错误处理 */
   private async handleResponse<T>(res: Response): Promise<T> {
     if (!res.ok) {
-      const body = await res.json().catch(() => ({})) as Record<string, unknown>;
+      const body = (await res.json().catch(() => ({}))) as Record<
+        string,
+        unknown
+      >;
       throw new Error(
         `Worker API error ${res.status}: ${body.error || res.statusText}`,
       );
     }
     const json = (await res.json()) as ApiResponse<T>;
     if (!json.success) {
-      throw new Error(
-        `Worker API error: ${json.error || "unknown error"}`,
-      );
+      throw new Error(`Worker API error: ${json.error || "unknown error"}`);
     }
     return json.data as T;
   }
@@ -89,7 +90,10 @@ export class MemoryClient {
    */
   private async handleListResponse<T>(res: Response): Promise<T> {
     if (!res.ok) {
-      const body = await res.json().catch(() => ({})) as Record<string, unknown>;
+      const body = (await res.json().catch(() => ({}))) as Record<
+        string,
+        unknown
+      >;
       throw new Error(
         `Worker API error ${res.status}: ${body.error || res.statusText}`,
       );

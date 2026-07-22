@@ -10,7 +10,7 @@ import type {
 } from "../types.js";
 import type { MemoryConfig } from "../config/runtime.js";
 import type { Providers, MemoryMode } from "../providers/factory.js";
-import { ensureDir, readFileSafe } from "../utils/fs.js";
+import { ensureDir } from "../utils/fs.js";
 import { MemoryPaths } from "./MemoryPaths.js";
 import {
   checkLineLimit,
@@ -18,14 +18,9 @@ import {
   validateProjectId,
 } from "../utils/validation.js";
 import { gitCommit } from "../utils/git.js";
-import {
-  getCurrentDtype,
-} from "../search/embedding.js";
+import { getCurrentDtype } from "../search/embedding.js";
 import { chunkMarkdown } from "../search/chunker.js";
-import {
-  ProjectStore,
-  refreshStaleIndices,
-} from "../search/vector-store.js";
+import { ProjectStore, refreshStaleIndices } from "../search/vector-store.js";
 import { parseContentByTimestamp } from "../utils/timestampParser.js";
 import { StateChecker } from "./StateChecker.js";
 import { FileSearcher } from "./FileSearcher.js";
@@ -59,11 +54,11 @@ export class MemoryManager {
       };
     }
 
-    this.stateChecker = new StateChecker(config.memoryDir);
+    this.stateChecker = new StateChecker(config.memoryDir, this.mode);
     this.fileSearcher = new FileSearcher(
       config.memoryDir,
       this.paths.dailyDir,
-      (p) => this.readFile(p),
+      this.providers.fileStorage,
       (id) => this.getProjectStore(id),
       this.mode,
     );
@@ -174,9 +169,7 @@ export class MemoryManager {
     if (this.mode === "remote") {
       const fileType = target;
       const effectiveDate =
-        target === "daily"
-          ? (normalizeDailyDate(date) ?? this.todayStr())
-          : "";
+        target === "daily" ? (normalizeDailyDate(date) ?? this.todayStr()) : "";
       const effectiveProject = project ?? "";
       const filePath = `${fileType}:${effectiveDate}:${effectiveProject}`;
       return { filePath, displayName: filePath };
@@ -222,8 +215,8 @@ export class MemoryManager {
    * 读取文件内容，文件不存在或读取失败时返回 null 而非抛异常
    * 避免调用方需要逐层 try/catch
    */
-  readFile(filePath: string): string | null {
-    return readFileSafe(filePath);
+  async readFile(filePath: string): Promise<string | null> {
+    return this.providers.fileStorage.readFile(filePath);
   }
 
   /**
@@ -413,7 +406,10 @@ export class MemoryManager {
 
       const projectId = this.extractProjectId(filePath);
       if (projectId) {
-        await this.providers.vectorIndex.upsert(embedded, `project/${projectId}`);
+        await this.providers.vectorIndex.upsert(
+          embedded,
+          `project/${projectId}`,
+        );
         return;
       }
 
@@ -514,23 +510,23 @@ export class MemoryManager {
    * 收集所有有内容的 context 文件，供 AI 构建提示词上下文
    * 包含全局 MEMORY/IDENTITY/USER 以及可选的 project memory
    */
-  getContextFiles(projectId?: string | null): ContextFile[] {
+  async getContextFiles(projectId?: string | null): Promise<ContextFile[]> {
     const files: ContextFile[] = [];
-    const memoryContent = this.readFile(this.getMemoryPath());
+    const memoryContent = await this.readFile(this.getMemoryPath());
     if (memoryContent?.trim()) {
       files.push({ name: "MEMORY.md", content: memoryContent.trim() });
     }
-    const identityContent = this.readFile(this.getIdentityPath());
+    const identityContent = await this.readFile(this.getIdentityPath());
     if (identityContent?.trim()) {
       files.push({ name: "IDENTITY.md", content: identityContent.trim() });
     }
-    const userContent = this.readFile(this.getUserPath());
+    const userContent = await this.readFile(this.getUserPath());
     if (userContent?.trim()) {
       files.push({ name: "USER.md", content: userContent.trim() });
     }
     if (projectId) {
       const projectMemoryPath = this.getProjectMemoryPath(projectId);
-      const projectContent = this.readFile(projectMemoryPath);
+      const projectContent = await this.readFile(projectMemoryPath);
       if (projectContent?.trim()) {
         files.push({
           name: `Project: ${projectId}`,
@@ -542,7 +538,10 @@ export class MemoryManager {
   }
 
   /** 委托给 FileSearcher：关键词搜索 */
-  searchFiles(query: string, maxResults: number): SearchResult[] {
+  async searchFiles(
+    query: string,
+    maxResults: number,
+  ): Promise<SearchResult[]> {
     return this.fileSearcher.searchFiles(query, maxResults);
   }
 
@@ -569,24 +568,24 @@ export class MemoryManager {
   }
 
   /** 委托给 FileSearcher：列出文件及其时间戳 */
-  listFilesWithTimestamps(
+  async listFilesWithTimestamps(
     limit: number = 7,
-  ): Array<{ name: string; timestamps: string[] }> {
+  ): Promise<Array<{ name: string; timestamps: string[] }>> {
     return this.fileSearcher.listFilesWithTimestamps(limit);
   }
 
   /** 委托给 FileSearcher：按月份分组列出文件 */
-  listFilesGroupedByMonth(): {
+  async listFilesGroupedByMonth(): Promise<{
     root: Array<{ name: string; timestamps: string[] }>;
     monthly: MonthGroup[];
-  } {
+  }> {
     return this.fileSearcher.listFilesGroupedByMonth();
   }
 
   /** 委托给 FileSearcher：按时间段筛选文件 */
-  listFilesByPeriod(
+  async listFilesByPeriod(
     period: string,
-  ): Array<{ name: string; timestamps: string[] }> {
+  ): Promise<Array<{ name: string; timestamps: string[] }>> {
     return this.fileSearcher.listFilesByPeriod(period);
   }
 }

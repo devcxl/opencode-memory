@@ -1,5 +1,9 @@
 import type { MemoryConfig } from "../config/runtime.js";
-import type { IVectorIndexProvider, IEmbeddingProvider, IFileStorageProvider } from "./types.js";
+import type {
+  IVectorIndexProvider,
+  IEmbeddingProvider,
+  IFileStorageProvider,
+} from "./types.js";
 
 export interface Providers {
   vectorIndex: IVectorIndexProvider;
@@ -20,12 +24,15 @@ export async function createProviders(
   config: MemoryConfig,
 ): Promise<Providers> {
   if (mode === "local") {
-    const [{ LocalVectorIndexProvider }, { LocalEmbeddingProvider }, { LocalFileStorageProvider }] =
-      await Promise.all([
-        import("./local/VectorIndexProvider.js"),
-        import("./local/EmbeddingProvider.js"),
-        import("./local/FileStorageProvider.js"),
-      ]);
+    const [
+      { LocalVectorIndexProvider },
+      { LocalEmbeddingProvider },
+      { LocalFileStorageProvider },
+    ] = await Promise.all([
+      import("./local/VectorIndexProvider.js"),
+      import("./local/EmbeddingProvider.js"),
+      import("./local/FileStorageProvider.js"),
+    ]);
     return {
       vectorIndex: new LocalVectorIndexProvider(config),
       embedding: new LocalEmbeddingProvider(),
@@ -36,12 +43,15 @@ export async function createProviders(
   // remote 模式
   const remoteConfig = config.remote ?? { apiUrl: "", apiKey: "" };
 
-  const [{ RemoteVectorIndexProvider }, { RemoteEmbeddingProvider }, { RemoteFileStorageProvider }] =
-    await Promise.all([
-      import("./remote/VectorIndexProvider.js"),
-      import("./remote/EmbeddingProvider.js"),
-      import("./remote/FileStorageProvider.js"),
-    ]);
+  const [
+    { RemoteVectorIndexProvider },
+    { RemoteEmbeddingProvider },
+    { RemoteFileStorageProvider },
+  ] = await Promise.all([
+    import("./remote/VectorIndexProvider.js"),
+    import("./remote/EmbeddingProvider.js"),
+    import("./remote/FileStorageProvider.js"),
+  ]);
   return {
     vectorIndex: new RemoteVectorIndexProvider(remoteConfig),
     embedding: new RemoteEmbeddingProvider(remoteConfig),

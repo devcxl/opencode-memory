@@ -35,7 +35,11 @@ export interface VectorSearchResult {
 /** 向量索引操作 */
 export interface IVectorIndexProvider {
   upsert(chunks: EmbeddedChunk[], namespace: string): Promise<void>;
-  search(vector: number[], topK: number, namespace: string): Promise<VectorSearchResult[]>;
+  search(
+    vector: number[],
+    topK: number,
+    namespace: string,
+  ): Promise<VectorSearchResult[]>;
   delete(ids: string[], namespace: string): Promise<void>;
   isStale?(metadata: EmbeddingMetadata): Promise<boolean>;
   clearNamespace?(namespace: string): Promise<void>;

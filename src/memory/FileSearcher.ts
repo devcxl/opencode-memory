@@ -8,6 +8,7 @@ import type {
   SearchScope,
 } from "../types.js";
 import type { MemoryMode } from "../providers/factory.js";
+import type { IFileStorageProvider } from "../providers/types.js";
 import { embedText } from "../search/embedding.js";
 import {
   extractTimestamps,
@@ -20,7 +21,7 @@ export class FileSearcher {
   constructor(
     private memoryDir: string,
     private dailyDir: string,
-    private readFile: (filePath: string) => string | null,
+    private fileStorage: IFileStorageProvider,
     private getProjectStore: (projectId: string) => ProjectStore,
     private mode: MemoryMode = "local",
   ) {}
@@ -28,8 +29,12 @@ export class FileSearcher {
   /**
    * 关键词搜索：逐行扫描文件，返回匹配行及其位置
    * 在内存中全量扫描而非依赖索引，适合文件量较少的场景
+   * remote 模式：通过 fileStorage.readFile 读取文件内容
    */
-  searchFiles(query: string, maxResults: number): SearchResult[] {
+  async searchFiles(
+    query: string,
+    maxResults: number,
+  ): Promise<SearchResult[]> {
     const results: SearchResult[] = [];
     const needle = query.toLowerCase();
     const searchPaths = [
@@ -46,7 +51,7 @@ export class FileSearcher {
         for (const file of files) {
           if (results.length >= maxResults) break;
           const filePath = path.join(dir, file);
-          const content = this.readFile(filePath);
+          const content = await this.fileStorage.readFile(filePath);
           if (!content) continue;
           const lines = content.split("\n");
           for (
@@ -74,10 +79,11 @@ export class FileSearcher {
    * 语义搜索：基于向量相似度匹配，支持按时段和项目筛选。
    *
    * 搜索策略：
-   * 1. 按 scope 决定查询全局索引、项目索引，或两者合并
-   * 2. scope=project 但无 projectId 时降级为全局搜索
-   * 3. 为每个结果附加时间戳（用于 period 过滤和展示）
-   * 4. period 过滤为宽松前缀匹配（"YYYY-MM" 或 "YYYY"），在向量检索后执行
+   * 1. remote 模式：直接通过 fileStorage.search() 调用 Worker API
+   * 2. local 模式：本地 embed + 向量搜索
+   * 3. scope=project 但无 projectId 时降级为全局搜索
+   * 4. 为每个结果附加时间戳（用于 period 过滤和展示）
+   * 5. period 过滤为宽松前缀匹配（"YYYY-MM" 或 "YYYY"），在向量检索后执行
    */
   async semanticSearch(
     query: string,
@@ -86,6 +92,46 @@ export class FileSearcher {
     projectId?: string | null,
     scope: SearchScope = "all",
   ): Promise<SemanticSearchResult[]> {
+    // remote 模式：直接调 Worker API 搜索
+    if (this.mode === "remote") {
+      const { RemoteFileStorageProvider } =
+        await import("../providers/remote/FileStorageProvider.js");
+      if (this.fileStorage instanceof RemoteFileStorageProvider) {
+        const includeGlobal = scope !== "project" || !projectId;
+        const globalResults = includeGlobal
+          ? await this.fileStorage.search(query, maxResults)
+          : [];
+        const projectResults =
+          projectId && scope !== "global"
+            ? await this.fileStorage.search(
+                query,
+                maxResults,
+                undefined,
+                projectId,
+              )
+            : [];
+
+        const allResults = [...globalResults, ...projectResults];
+        allResults.sort((a, b) => b.score - a.score);
+
+        const filtered = period
+          ? allResults.filter((r) => {
+              const ts = new Date(r.created_at).toISOString().slice(0, 10);
+              return ts.startsWith(period);
+            })
+          : allResults;
+
+        return filtered.slice(0, maxResults).map((r) => ({
+          score: r.score,
+          filePath: r.id,
+          heading: "",
+          text: r.text,
+          timestamp: new Date(r.created_at).toISOString().slice(0, 10),
+        }));
+      }
+    }
+
+    // local 模式：本地 embedding + 向量搜索
     const queryVector = await embedText(query);
     const module = await import("../search/vector-store.js");
     // period 过滤时先取全部结果（或超大上限），在内存中过滤
@@ -107,7 +153,7 @@ export class FileSearcher {
 
     const resultsWithTimestamp: SemanticSearchResult[] = [];
     for (const result of results) {
-      const fileContent = this.readFile(result.filePath);
+      const fileContent = await this.fileStorage.readFile(result.filePath);
       let timestamp = result.timestamp;
 
       // 若索引中无时间戳，尝试从文件内容中推断
@@ -150,8 +196,8 @@ export class FileSearcher {
   }
 
   /** 读取文件并提取时间戳列表 */
-  private getTimestamps(dir: string, file: string): string[] {
-    const content = this.readFile(path.join(dir, file));
+  private async getTimestamps(dir: string, file: string): Promise<string[]> {
+    const content = await this.fileStorage.readFile(path.join(dir, file));
     return content ? extractTimestamps(content) : [];
   }
 
@@ -186,14 +232,14 @@ export class FileSearcher {
    * 列出文件及其关联的时间戳列表
    * daily 文件数超过 limit 时汇总为 "+N more" 条目
    */
-  listFilesWithTimestamps(
+  async listFilesWithTimestamps(
     limit: number = 7,
-  ): Array<{ name: string; timestamps: string[] }> {
+  ): Promise<Array<{ name: string; timestamps: string[] }>> {
     const result: Array<{ name: string; timestamps: string[] }> = [];
     const { root, daily } = this.listFiles();
 
     for (const file of root) {
-      const timestamps = this.getTimestamps(this.memoryDir, file);
+      const timestamps = await this.getTimestamps(this.memoryDir, file);
       result.push({ name: file, timestamps });
     }
 
@@ -201,7 +247,7 @@ export class FileSearcher {
     const moreCount = daily.length - limit;
 
     for (const file of recentDaily) {
-      const timestamps = this.getTimestamps(this.dailyDir, file);
+      const timestamps = await this.getTimestamps(this.dailyDir, file);
       result.push({ name: `daily/${file}`, timestamps });
     }
 
@@ -219,15 +265,15 @@ export class FileSearcher {
    * 按月份分组列出文件，返回根文件列表和按月聚合的 daily 分组
    * 每月包含文件数、条目数等统计，按月份倒序排列
    */
-  listFilesGroupedByMonth(): {
+  async listFilesGroupedByMonth(): Promise<{
     root: Array<{ name: string; timestamps: string[] }>;
     monthly: MonthGroup[];
-  } {
+  }> {
     const { root, daily } = this.listFiles();
 
     const rootFiles: Array<{ name: string; timestamps: string[] }> = [];
     for (const file of root) {
-      const timestamps = this.getTimestamps(this.memoryDir, file);
+      const timestamps = await this.getTimestamps(this.memoryDir, file);
       rootFiles.push({ name: file, timestamps });
     }
 
@@ -239,7 +285,7 @@ export class FileSearcher {
     for (const file of daily) {
       const dateStr = file.replace(".md", "");
       const month = dateStr.slice(0, 7);
-      const timestamps = this.getTimestamps(this.dailyDir, file);
+      const timestamps = await this.getTimestamps(this.dailyDir, file);
 
       if (!monthlyMap.has(month)) {
         monthlyMap.set(month, []);
@@ -267,9 +313,9 @@ export class FileSearcher {
    * 按时间段筛选 daily 文件
    * period 为 "YYYY-MM" 或 "YYYY" 格式，匹配文件名前缀
    */
-  listFilesByPeriod(
+  async listFilesByPeriod(
     period: string,
-  ): Array<{ name: string; timestamps: string[] }> {
+  ): Promise<Array<{ name: string; timestamps: string[] }>> {
     const { daily } = this.listFiles();
     const result: Array<{ name: string; timestamps: string[] }> = [];
 
@@ -285,7 +331,7 @@ export class FileSearcher {
     });
 
     for (const file of filteredDaily) {
-      const timestamps = this.getTimestamps(this.dailyDir, file);
+      const timestamps = await this.getTimestamps(this.dailyDir, file);
       result.push({ name: `daily/${file}`, timestamps });
     }
 

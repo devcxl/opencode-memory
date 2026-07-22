@@ -1,8 +1,19 @@
-import type { IVectorIndexProvider, EmbeddedChunk, VectorSearchResult, EmbeddingMetadata } from "../types.js";
+import type {
+  IVectorIndexProvider,
+  EmbeddedChunk,
+  VectorSearchResult,
+  EmbeddingMetadata,
+} from "../types.js";
 import type { MemoryConfig } from "../../config/runtime.js";
 import * as path from "node:path";
 import { MemoryPaths } from "../../memory/MemoryPaths.js";
-import { upsertFile, semanticSearch, deleteFileVectors, ProjectStore, isCurrentEmbeddingMetadata } from "../../search/vector-store.js";
+import {
+  upsertFile,
+  semanticSearch,
+  deleteFileVectors,
+  ProjectStore,
+  isCurrentEmbeddingMetadata,
+} from "../../search/vector-store.js";
 
 /**
  * 本地 vectra 向量索引 Provider。

@@ -10,14 +10,14 @@ import type { MemoryManager } from "../memory/MemoryManager.js";
  * @param memoryManager - MemoryManager 实例
  * @returns 格式化文件列表字符串
  */
-export function handleList(
+export async function handleList(
   params: { period?: string },
   memoryManager: MemoryManager,
-): string {
+): Promise<string> {
   const { period } = params;
 
   if (period) {
-    const filesWithTimestamps = memoryManager.listFilesByPeriod(period);
+    const filesWithTimestamps = await memoryManager.listFilesByPeriod(period);
     if (filesWithTimestamps.length === 0) {
       return `No daily logs found for period: ${period}`;
     }
@@ -35,7 +35,7 @@ export function handleList(
     return `Daily logs for ${period} (${filesWithTimestamps.length} files):\n${content}`;
   }
 
-  const grouped = memoryManager.listFilesGroupedByMonth();
+  const grouped = await memoryManager.listFilesGroupedByMonth();
   const parts: string[] = [];
 
   if (

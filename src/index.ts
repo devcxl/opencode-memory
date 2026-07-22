@@ -63,10 +63,10 @@ export const MemoryPlugin: Plugin = async (ctx: PluginInput) => {
 
   // 引导阶段优先展示 BOOTSTRAP.md，避免同时展示引导和常规记忆造成信息过载。
   // 常规阶段按 MEMORY > IDENTITY > USER > PROJECT 顺序注入上下文文件。
-  const buildContext = (pId?: string | null): string => {
+  const buildContext = async (pId?: string | null): Promise<string> => {
     const sections: string[] = [];
     if (bootstrapManager.isBootstrapNeeded()) {
-      const bootstrapContent = memoryManager.readFile(
+      const bootstrapContent = await memoryManager.readFile(
         memoryManager.getBootstrapPath(),
       );
       if (bootstrapContent?.trim()) {
@@ -75,7 +75,7 @@ export const MemoryPlugin: Plugin = async (ctx: PluginInput) => {
         );
       }
     } else {
-      const contextFiles = memoryManager.getContextFiles(pId);
+      const contextFiles = await memoryManager.getContextFiles(pId);
       for (const file of contextFiles) {
         sections.push(`## ${file.name}\n\n${file.content}`);
       }
@@ -194,7 +194,7 @@ export const MemoryPlugin: Plugin = async (ctx: PluginInput) => {
     },
 
     "experimental.chat.system.transform": async (_input, output) => {
-      const memoryContext = buildContext(
+      const memoryContext = await buildContext(
         resolveProjectId(undefined, projectId),
       );
       if (!memoryContext) return;
