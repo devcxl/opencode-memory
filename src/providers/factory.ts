@@ -34,6 +34,8 @@ export async function createProviders(
   }
 
   // remote 模式
+  const remoteConfig = config.remote ?? { apiUrl: "", apiKey: "" };
+
   const [{ RemoteVectorIndexProvider }, { RemoteEmbeddingProvider }, { RemoteFileStorageProvider }] =
     await Promise.all([
       import("./remote/VectorIndexProvider.js"),
@@ -41,8 +43,8 @@ export async function createProviders(
       import("./remote/FileStorageProvider.js"),
     ]);
   return {
-    vectorIndex: new RemoteVectorIndexProvider(config),
-    embedding: new RemoteEmbeddingProvider(config),
-    fileStorage: new RemoteFileStorageProvider(config),
+    vectorIndex: new RemoteVectorIndexProvider(remoteConfig),
+    embedding: new RemoteEmbeddingProvider(remoteConfig),
+    fileStorage: new RemoteFileStorageProvider(remoteConfig),
   };
 }

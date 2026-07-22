@@ -2,9 +2,19 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as fs from "node:fs";
 
+/** 远程模式配置 */
+export interface RemoteConfig {
+  apiUrl: string;
+  apiKey: string;
+}
+
 /** 内存插件运行时配置 */
 export interface MemoryConfig {
   memoryDir: string;
+  /** 运行模式：local（本地文件+向量索引）或 remote（Cloudflare Worker API） */
+  mode: "local" | "remote";
+  /** 远程模式配置（mode=remote 时必填） */
+  remote?: RemoteConfig;
 }
 
 function getHomeDir(): string {
@@ -23,7 +33,21 @@ export function getMemoryDir(): string {
 /** 生成运行时配置对象 */
 export function loadConfig(): MemoryConfig {
   const memoryDir = getMemoryDir();
-  return { memoryDir };
+
+  // 从 opencode.json 插件配置读取 mode
+  const modeStr = getPluginConfigOption("mode");
+  const mode: "local" | "remote" =
+    modeStr === "remote" ? "remote" : "local";
+
+  const remote: RemoteConfig | undefined =
+    mode === "remote"
+      ? {
+          apiUrl: getPluginConfigOption("remoteApiUrl") || "http://localhost:8787",
+          apiKey: getPluginConfigOption("remoteApiKey") || "",
+        }
+      : undefined;
+
+  return { memoryDir, mode, remote };
 }
 
 /** 获取 opencode 配置文件路径 */
