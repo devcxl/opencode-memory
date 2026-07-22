@@ -1,0 +1,56 @@
+name = "cloudflare-memory"
+compatibility_date = "2025-01-01"
+main = "src/index.ts"
+
+[assets]
+directory = "../web/dist"
+not_found_handling = "single-page-application"
+run_worker_first = ["/api/*", "/mcp", "/health"]
+
+[ai]
+binding = "AI"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "memory-db"
+database_id = "57fc938b-32f0-4594-a735-eea9e9b35bea"
+
+[[vectorize]]
+binding = "VEC"
+index_name = "memory-index"
+
+[triggers]
+crons = ["0 4 * * *"]
+
+[observability]
+enabled = true
+
+[vars]
+ALLOWED_ORIGINS = "http://localhost:3000,http://127.0.0.1:3000"
+RATE_LIMIT = "100"
+
+# Staging 环境配置（wrangler deploy --env staging）
+[env.staging]
+name = "cloudflare-memory-staging"
+
+[env.staging.ai]
+binding = "AI"
+
+[env.staging.observability]
+enabled = true
+
+[env.staging.vars]
+ALLOWED_ORIGINS = "*"
+RATE_LIMIT = "100"
+
+[[env.staging.d1_databases]]
+binding = "DB"
+database_name = "memory-db"
+database_id = "57fc938b-32f0-4594-a735-eea9e9b35bea"
+
+[[env.staging.vectorize]]
+binding = "VEC"
+index_name = "memory-index"
+
+[env.staging.triggers]
+crons = ["0 4 * * *"]

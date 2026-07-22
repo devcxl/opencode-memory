@@ -1,7 +1,8 @@
 {
   "name": "@devcxl/opencode-memory",
   "version": "1.2.0",
-  "description": "Simple markdown-based memory plugin for OpenCode",
+  "description": "Simple markdown-based memory plugin for OpenCode — supports local and Cloudflare Workers remote modes",
+  "private": true,
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -12,7 +13,11 @@
     "typecheck": "tsc --noEmit",
     "format": "prettier --write \"src/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\"",
-    "prepare": "husky"
+    "prepare": "husky",
+    "typecheck:all": "pnpm -r run typecheck",
+    "dev:worker": "pnpm --filter @cfmem/api dev",
+    "build:web": "pnpm --filter @cfmem/web build",
+    "deploy:worker": "pnpm --filter @cfmem/api deploy"
   },
   "keywords": [
     "opencode",

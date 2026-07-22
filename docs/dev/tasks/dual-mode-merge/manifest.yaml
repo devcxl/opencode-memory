@@ -1,0 +1,126 @@
+tasks:
+  - id: T1
+    name: "pnpm workspace 设置"
+    phase: 1
+    depends_on: []
+    labels: ["config"]
+    estimate: "1h"
+
+  - id: T2
+    name: "迁移 worker/"
+    phase: 1
+    depends_on: [T1]
+    labels: ["backend"]
+    estimate: "1.5h"
+
+  - id: T3
+    name: "迁移 web/"
+    phase: 1
+    depends_on: [T1]
+    labels: ["frontend"]
+    estimate: "1h"
+
+  - id: T4
+    name: "迁移 shared/"
+    phase: 1
+    depends_on: [T1]
+    labels: ["config"]
+    estimate: "0.5h"
+
+  - id: T5
+    name: "迁移 scripts/docs"
+    phase: 1
+    depends_on: [T1]
+    labels: ["config"]
+    estimate: "0.5h"
+
+  - id: T6
+    name: "tsconfig 统一"
+    phase: 1
+    depends_on: [T2, T3, T4, T5]
+    labels: ["config"]
+    estimate: "1h"
+
+  - id: T7
+    name: "D1 Migration 0006"
+    phase: 2
+    depends_on: [T2, T6]
+    labels: ["backend"]
+    estimate: "0.5h"
+
+  - id: T8
+    name: "Worker API 扩展 + 测试"
+    phase: 2
+    depends_on: [T7]
+    labels: ["backend"]
+    estimate: "2h"
+
+  - id: T9
+    name: "context 端点扩展"
+    phase: 2
+    depends_on: [T7]
+    labels: ["backend"]
+    estimate: "1h"
+
+  - id: T10
+    name: "Provider 接口定义"
+    phase: 3
+    depends_on: [T4, T6]
+    labels: ["backend"]
+    estimate: "1h"
+
+  - id: T11
+    name: "LocalProvider 实现"
+    phase: 3
+    depends_on: [T10]
+    labels: ["backend"]
+    estimate: "2h"
+
+  - id: T12
+    name: "RemoteProvider 实现"
+    phase: 3
+    depends_on: [T10, T8]
+    labels: ["backend"]
+    estimate: "2h"
+
+  - id: T13
+    name: "MemoryManager 改造"
+    phase: 3
+    depends_on: [T10, T11]
+    labels: ["backend"]
+    estimate: "2h"
+
+  - id: T14
+    name: "插件入口 + 配置"
+    phase: 3
+    depends_on: [T11, T12, T13]
+    labels: ["backend", "config"]
+    estimate: "1.5h"
+
+  - id: T15
+    name: "端到端集成测试"
+    phase: 3
+    depends_on: [T14]
+    labels: ["backend"]
+    estimate: "2h"
+
+  - id: T16
+    name: "删除 MCP 代码"
+    phase: 4
+    depends_on: [T15]
+    labels: ["backend"]
+    estimate: "0.5h"
+
+  - id: T17
+    name: "文档更新"
+    phase: 4
+    depends_on: [T15]
+    labels: ["config"]
+    estimate: "1h"
+
+  - id: T18
+    name: "最终验证"
+    phase: 4
+    depends_on: [T16, T17]
+    labels: ["backend", "config"]
+    estimate: "1h"

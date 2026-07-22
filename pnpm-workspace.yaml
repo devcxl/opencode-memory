@@ -1,0 +1,12 @@
+packages:
+  - "worker"
+  # - "web"  # 待 sharp native build 环境就绪后启用
+  - "packages/*"
+allowBuilds:
+  esbuild: true
+  msgpackr-extract: true
+  onnxruntime-node: true
+  protobufjs: true
+  sharp: set this to true or false
+  # sharp: true  # 需要 libvips，CI 环境安装后启用
+  workerd: true
