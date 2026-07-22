@@ -3,6 +3,7 @@ import { tool } from "@opencode-ai/plugin";
 import { loadConfig } from "./config/runtime.js";
 import { MemoryManager } from "./memory/MemoryManager.js";
 import { BootstrapManager } from "./memory/BootstrapManager.js";
+import { createProviders, type Providers } from "./providers/factory.js";
 import { detectProject } from "./utils/projectDetector.js";
 import {
   getMemoryAwarenessInstructions,
@@ -48,7 +49,15 @@ const sessionStates = new Map<string, SessionState>();
  */
 export const MemoryPlugin: Plugin = async (ctx: PluginInput) => {
   const config = loadConfig();
-  const memoryManager = new MemoryManager(config);
+
+  // 🆕 根据 mode 创建 Provider 实例并注入 MemoryManager
+  let providers: Providers | undefined;
+  if (config.mode === "remote" && config.remote) {
+    providers = await createProviders("remote", config);
+  }
+  // local 模式：不注入 providers，MemoryManager 内部自动创建 LocalProvider
+
+  const memoryManager = new MemoryManager(config, providers);
   const bootstrapManager = new BootstrapManager(memoryManager);
   const projectId = detectProject();
 
