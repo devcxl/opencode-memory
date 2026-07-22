@@ -508,32 +508,32 @@ export class MemoryManager {
 
   /**
    * 收集所有有内容的 context 文件，供 AI 构建提示词上下文
-   * 包含全局 MEMORY/IDENTITY/USER 以及可选的 project memory
+   * 包含全局 MEMORY/IDENTITY/USER 以及可选的 project memory。
+   *
+   * 统一使用 getPathForTarget() 生成路径，确保 local/remote 双模式兼容。
    */
   async getContextFiles(projectId?: string | null): Promise<ContextFile[]> {
     const files: ContextFile[] = [];
-    const memoryContent = await this.readFile(this.getMemoryPath());
-    if (memoryContent?.trim()) {
-      files.push({ name: "MEMORY.md", content: memoryContent.trim() });
-    }
-    const identityContent = await this.readFile(this.getIdentityPath());
-    if (identityContent?.trim()) {
-      files.push({ name: "IDENTITY.md", content: identityContent.trim() });
-    }
-    const userContent = await this.readFile(this.getUserPath());
-    if (userContent?.trim()) {
-      files.push({ name: "USER.md", content: userContent.trim() });
-    }
-    if (projectId) {
-      const projectMemoryPath = this.getProjectMemoryPath(projectId);
-      const projectContent = await this.readFile(projectMemoryPath);
-      if (projectContent?.trim()) {
-        files.push({
-          name: `Project: ${projectId}`,
-          content: projectContent.trim(),
-        });
+
+    const readTarget = async (
+      target: string,
+      name: string,
+      project?: string | null,
+    ) => {
+      const { filePath } = this.getPathForTarget(target, undefined, project);
+      const content = await this.readFile(filePath);
+      if (content?.trim()) {
+        files.push({ name, content: content.trim() });
       }
+    };
+
+    await readTarget("memory", "MEMORY.md");
+    await readTarget("identity", "IDENTITY.md");
+    await readTarget("user", "USER.md");
+    if (projectId) {
+      await readTarget("memory", `Project: ${projectId}`, projectId);
     }
+
     return files;
   }
 

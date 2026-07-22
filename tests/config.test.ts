@@ -368,6 +368,71 @@ test("getPluginConfigOption falls back on invalid opencode config", () => {
   }
 });
 
+test("getPluginConfigObject handles JSONC trailing comma (real-world opencode.json structure)", () => {
+  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "opm-config-"));
+  try {
+    withHome(homeDir, () => {
+      const configPath = getOpencodeConfigPath();
+      fs.mkdirSync(path.dirname(configPath), { recursive: true });
+      // 模拟真实 opencode.json：包含 trailing comma 的数组和其他 JSONC 特性
+      const jsoncConfig = `{
+  "provider": {
+    "openai": {
+      "whitelist": [
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+        "gpt-5.5",
+      ]
+    }
+  },
+  "plugin": [
+    ["/path/to/opencode-memory/dist/index.js", {
+      "mode": "remote",
+      "remote": {
+        "apiUrl": "https://mem.example.com",
+        "apiKey": "test-key-jsonc",
+        "enabled": true,
+      }
+    }]
+  ]
+}`;
+      fs.writeFileSync(configPath, jsoncConfig, "utf-8");
+
+      const opts = getPluginConfigObject();
+      expect(opts).toBeDefined();
+      expect(opts!.mode).toBe("remote");
+      expect((opts!.remote as Record<string, unknown>).apiUrl).toBe("https://mem.example.com");
+      expect((opts!.remote as Record<string, unknown>).apiKey).toBe("test-key-jsonc");
+    });
+  } finally {
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  }
+});
+
+test("getPluginConfigOption handles JSONC trailing comma", () => {
+  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "opm-config-"));
+  try {
+    withHome(homeDir, () => {
+      const configPath = getOpencodeConfigPath();
+      fs.mkdirSync(path.dirname(configPath), { recursive: true });
+      const jsoncConfig = `{
+  "plugin": [
+    ["@devcxl/opencode-memory", {
+      "dtype": "q8",
+      "mode": "remote",
+    }]
+  ]
+}`;
+      fs.writeFileSync(configPath, jsoncConfig, "utf-8");
+
+      expect(getPluginConfigOption("dtype")).toBe("q8");
+      expect(getPluginConfigOption("mode")).toBe("remote");
+    });
+  } finally {
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  }
+});
+
 // ─── 1.2 embedding 配置测试 ────────────────────────────────────
 
 import {

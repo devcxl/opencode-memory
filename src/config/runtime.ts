@@ -2,6 +2,17 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as fs from "node:fs";
 
+/**
+ * 解析 opencode.json 配置（兼容 JSONC trailing comma）。
+ * 先用正则移除 trailing comma，再用标准 JSON.parse。
+ * opencode 自身使用 JSONC 解析器，但插件侧无此依赖，此处做最小兼容。
+ */
+function parseConfigFile(raw: string): unknown {
+  // 移除 trailing comma: ,] → ]  ,} → }
+  const cleaned = raw.replace(/,(\s*[}\]])/g, "$1");
+  return JSON.parse(cleaned);
+}
+
 /** 远程模式配置 */
 export interface RemoteConfig {
   apiUrl: string;
@@ -36,7 +47,7 @@ export function getPluginConfigObject(): Record<string, unknown> | undefined {
 
   try {
     const raw = fs.readFileSync(configPath, "utf-8");
-    const cfg = JSON.parse(raw);
+    const cfg = parseConfigFile(raw) as Record<string, unknown>;
     if (!Array.isArray(cfg.plugin)) return undefined;
 
     for (const entry of cfg.plugin) {
@@ -117,7 +128,7 @@ export function getPluginConfigOption(key: string): string | undefined {
 
   try {
     const raw = fs.readFileSync(configPath, "utf-8");
-    const cfg = JSON.parse(raw);
+    const cfg = parseConfigFile(raw) as Record<string, unknown>;
     if (!Array.isArray(cfg.plugin)) return undefined;
 
     for (const entry of cfg.plugin) {
