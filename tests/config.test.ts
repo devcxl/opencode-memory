@@ -12,6 +12,8 @@ import {
   getPluginConfigOption,
   isZhLocale,
   isDebugEnabled,
+  getPluginConfigObject,
+  resolveEnvRef,
 } from "../src/config/runtime.js";
 
 function withHome<T>(homeDir: string, run: () => T): T {
@@ -42,6 +44,246 @@ test("loadConfig returns memoryDir from getMemoryDir", () => {
   expect(cfg.memoryDir).toBe(getMemoryDir());
   expect(typeof cfg.memoryDir).toBe("string");
   expect(cfg.memoryDir.length).toBeGreaterThan(0);
+});
+
+// ─── 1.1b 双模式配置测试 ───────────────────────────────────────
+
+test("loadConfig defaults to mode=local with no config file", () => {
+  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "opm-config-"));
+  try {
+    withHome(homeDir, () => {
+      const cfg = loadConfig();
+      expect(cfg.mode).toBe("local");
+      expect(cfg.remote).toBeUndefined();
+    });
+  } finally {
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  }
+});
+
+test("loadConfig reads mode from opencode.json", () => {
+  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "opm-config-"));
+  try {
+    withHome(homeDir, () => {
+      const configPath = getOpencodeConfigPath();
+      fs.mkdirSync(path.dirname(configPath), { recursive: true });
+      fs.writeFileSync(
+        configPath,
+        JSON.stringify({
+          plugin: [["@devcxl/opencode-memory", { mode: "remote", remote: { apiUrl: "https://mem.example.com", apiKey: "test-key" } }]],
+        }),
+        "utf-8",
+      );
+
+      const cfg = loadConfig();
+      expect(cfg.mode).toBe("remote");
+      expect(cfg.remote?.apiUrl).toBe("https://mem.example.com");
+      expect(cfg.remote?.apiKey).toBe("test-key");
+    });
+  } finally {
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  }
+});
+
+test("loadConfig OPM_MODE env var overrides opencode.json mode", () => {
+  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "opm-config-"));
+  const prevMode = process.env.OPM_MODE;
+  try {
+    process.env.OPM_MODE = "remote";
+    withHome(homeDir, () => {
+      const configPath = getOpencodeConfigPath();
+      fs.mkdirSync(path.dirname(configPath), { recursive: true });
+      fs.writeFileSync(
+        configPath,
+        JSON.stringify({
+          plugin: [["@devcxl/opencode-memory", { mode: "local" }]],
+        }),
+        "utf-8",
+      );
+
+      // OPM_MODE=remote overrides opencode.json mode=local
+      // But needs remote config too — env var provides apiKey
+      process.env.OPM_API_KEY = "env-override-key";
+      const cfg = loadConfig();
+      expect(cfg.mode).toBe("remote");
+      expect(cfg.remote?.apiKey).toBe("env-override-key");
+    });
+  } finally {
+    if (prevMode === undefined) delete process.env.OPM_MODE;
+    else process.env.OPM_MODE = prevMode;
+    delete process.env.OPM_API_KEY;
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  }
+});
+
+test("loadConfig env:// prefix resolves to environment variable", () => {
+  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "opm-config-"));
+  const prevKey = process.env.OPM_CUSTOM_KEY;
+  try {
+    process.env.OPM_CUSTOM_KEY = "resolved-value";
+    withHome(homeDir, () => {
+      const configPath = getOpencodeConfigPath();
+      fs.mkdirSync(path.dirname(configPath), { recursive: true });
+      fs.writeFileSync(
+        configPath,
+        JSON.stringify({
+          plugin: [["@devcxl/opencode-memory", { mode: "remote", remote: { apiUrl: "https://mem.example.com", apiKey: "env://OPM_CUSTOM_KEY" } }]],
+        }),
+        "utf-8",
+      );
+
+      const cfg = loadConfig();
+      expect(cfg.mode).toBe("remote");
+      expect(cfg.remote?.apiKey).toBe("resolved-value");
+    });
+  } finally {
+    if (prevKey === undefined) delete process.env.OPM_CUSTOM_KEY;
+    else process.env.OPM_CUSTOM_KEY = prevKey;
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  }
+});
+
+test("loadConfig OPM_API_URL env var overrides opencode.json apiUrl", () => {
+  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "opm-config-"));
+  const prevUrl = process.env.OPM_API_URL;
+  try {
+    process.env.OPM_API_URL = "https://env-override.example.com";
+    withHome(homeDir, () => {
+      const configPath = getOpencodeConfigPath();
+      fs.mkdirSync(path.dirname(configPath), { recursive: true });
+      fs.writeFileSync(
+        configPath,
+        JSON.stringify({
+          plugin: [["@devcxl/opencode-memory", { mode: "remote", remote: { apiKey: "test-key" } }]],
+        }),
+        "utf-8",
+      );
+
+      const cfg = loadConfig();
+      expect(cfg.remote?.apiUrl).toBe("https://env-override.example.com");
+    });
+  } finally {
+    if (prevUrl === undefined) delete process.env.OPM_API_URL;
+    else process.env.OPM_API_URL = prevUrl;
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  }
+});
+
+test("loadConfig throws when remote mode but no apiKey", () => {
+  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "opm-config-"));
+  try {
+    withHome(homeDir, () => {
+      const configPath = getOpencodeConfigPath();
+      fs.mkdirSync(path.dirname(configPath), { recursive: true });
+      fs.writeFileSync(
+        configPath,
+        JSON.stringify({
+          plugin: [["@devcxl/opencode-memory", { mode: "remote", remote: { apiUrl: "https://mem.example.com" } }]],
+        }),
+        "utf-8",
+      );
+
+      expect(() => loadConfig()).toThrow(/apiKey/);
+    });
+  } finally {
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  }
+});
+
+test("loadConfig defaults apiUrl to empty string when not configured in remote mode", () => {
+  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "opm-config-"));
+  try {
+    withHome(homeDir, () => {
+      const configPath = getOpencodeConfigPath();
+      fs.mkdirSync(path.dirname(configPath), { recursive: true });
+      fs.writeFileSync(
+        configPath,
+        JSON.stringify({
+          plugin: [["@devcxl/opencode-memory", { mode: "remote", remote: { apiKey: "test-key" } }]],
+        }),
+        "utf-8",
+      );
+
+      const cfg = loadConfig();
+      expect(cfg.remote?.apiUrl).toBe("");
+    });
+  } finally {
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  }
+});
+
+test("resolveEnvRef returns value unchanged when no env:// prefix", () => {
+  expect(resolveEnvRef("plain-value")).toBe("plain-value");
+});
+
+test("resolveEnvRef returns undefined when value is undefined", () => {
+  expect(resolveEnvRef(undefined)).toBeUndefined();
+});
+
+test("resolveEnvRef resolves env:// prefix from process.env", () => {
+  const prev = process.env.RESOLVE_TEST_KEY;
+  try {
+    process.env.RESOLVE_TEST_KEY = "resolved";
+    expect(resolveEnvRef("env://RESOLVE_TEST_KEY")).toBe("resolved");
+  } finally {
+    if (prev === undefined) delete process.env.RESOLVE_TEST_KEY;
+    else process.env.RESOLVE_TEST_KEY = prev;
+  }
+});
+
+test("resolveEnvRef returns undefined when env var is not set", () => {
+  const prev = process.env.NONEXISTENT_VAR;
+  try {
+    delete process.env.NONEXISTENT_VAR;
+    expect(resolveEnvRef("env://NONEXISTENT_VAR")).toBeUndefined();
+  } finally {
+    if (prev !== undefined) process.env.NONEXISTENT_VAR = prev;
+  }
+});
+
+test("getPluginConfigObject returns the full plugin options object", () => {
+  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "opm-config-"));
+  try {
+    withHome(homeDir, () => {
+      const configPath = getOpencodeConfigPath();
+      fs.mkdirSync(path.dirname(configPath), { recursive: true });
+      fs.writeFileSync(
+        configPath,
+        JSON.stringify({
+          plugin: [["@devcxl/opencode-memory", { mode: "remote", remote: { apiUrl: "https://example.com", apiKey: "key123" } }]],
+        }),
+        "utf-8",
+      );
+
+      const opts = getPluginConfigObject();
+      expect(opts).toBeDefined();
+      expect(opts!.mode).toBe("remote");
+      expect(opts!.remote).toEqual({ apiUrl: "https://example.com", apiKey: "key123" });
+    });
+  } finally {
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  }
+});
+
+test("getPluginConfigObject returns undefined when no opencode-memory plugin entry", () => {
+  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "opm-config-"));
+  try {
+    withHome(homeDir, () => {
+      const configPath = getOpencodeConfigPath();
+      fs.mkdirSync(path.dirname(configPath), { recursive: true });
+      fs.writeFileSync(
+        configPath,
+        JSON.stringify({
+          plugin: [["@example/other", { dtype: "q4" }]],
+        }),
+        "utf-8",
+      );
+
+      expect(getPluginConfigObject()).toBeUndefined();
+    });
+  } finally {
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  }
 });
 
 test("isZhLocale true when LANG starts with zh", () => {

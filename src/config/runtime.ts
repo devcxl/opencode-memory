@@ -30,24 +30,78 @@ export function getMemoryDir(): string {
   return path.join(home, ".config", "opencode", "memory");
 }
 
-/** 生成运行时配置对象 */
+/** 获取插件配置对象（完整的嵌套 JSON 对象，而非扁平 key） */
+export function getPluginConfigObject(): Record<string, unknown> | undefined {
+  const configPath = getOpencodeConfigPath();
+
+  try {
+    const raw = fs.readFileSync(configPath, "utf-8");
+    const cfg = JSON.parse(raw);
+    if (!Array.isArray(cfg.plugin)) return undefined;
+
+    for (const entry of cfg.plugin) {
+      if (
+        Array.isArray(entry) &&
+        entry.length >= 2 &&
+        typeof entry[0] === "string" &&
+        entry[0].includes("opencode-memory")
+      ) {
+        const opts = entry[1];
+        if (opts && typeof opts === "object") {
+          return opts as Record<string, unknown>;
+        }
+      }
+    }
+  } catch {}
+
+  return undefined;
+}
+
+/** 解析 env:// 前缀的配置值：env://OPM_API_KEY → process.env.OPM_API_KEY */
+export function resolveEnvRef(value: string | undefined): string | undefined {
+  if (!value) return value;
+  if (value.startsWith("env://")) {
+    return process.env[value.slice(6)];
+  }
+  return value;
+}
+
+/** 生成运行时配置对象，支持 opencode.json + 环境变量双重配置 */
 export function loadConfig(): MemoryConfig {
   const memoryDir = getMemoryDir();
+  const pluginOpts = getPluginConfigObject();
 
-  // 从 opencode.json 插件配置读取 mode
-  const modeStr = getPluginConfigOption("mode");
-  const mode: "local" | "remote" =
-    modeStr === "remote" ? "remote" : "local";
+  // 从 opencode.json 读取 mode
+  const configMode = pluginOpts?.mode as string | undefined;
 
-  const remote: RemoteConfig | undefined =
-    mode === "remote"
-      ? {
-          apiUrl: getPluginConfigOption("remoteApiUrl") || "http://localhost:8787",
-          apiKey: getPluginConfigOption("remoteApiKey") || "",
-        }
-      : undefined;
+  // 从 opencode.json 读取 remote 嵌套配置
+  const remoteConfig = pluginOpts?.remote as Record<string, string> | undefined;
+  const configApiUrl = remoteConfig?.apiUrl;
+  const configApiKeyRaw = remoteConfig?.apiKey;
 
-  return { memoryDir, mode, remote };
+  // 环境变量覆盖：OPM_MODE > opencode.json > 默认 "local"
+  const effectiveMode: "local" | "remote" =
+    process.env.OPM_MODE === "remote" ? "remote"
+    : configMode === "remote" ? "remote"
+    : "local";
+
+  const config: MemoryConfig = { memoryDir, mode: effectiveMode };
+
+  if (effectiveMode === "remote") {
+    // apiKey 优先级：OPM_API_KEY 环境变量 > opencode.json remote.apiKey（均支持 env:// 前缀）
+    const apiKey = resolveEnvRef(process.env.OPM_API_KEY || configApiKeyRaw);
+    if (!apiKey) {
+      throw new Error(
+        "Remote mode requires apiKey. Set OPM_API_KEY or configure remote.apiKey in opencode.json.",
+      );
+    }
+    config.remote = {
+      apiUrl: process.env.OPM_API_URL || configApiUrl || "",
+      apiKey,
+    };
+  }
+
+  return config;
 }
 
 /** 获取 opencode 配置文件路径 */
