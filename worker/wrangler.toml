@@ -13,7 +13,7 @@ binding = "AI"
 [[d1_databases]]
 binding = "DB"
 database_name = "memory-db"
-database_id = "57fc938b-32f0-4594-a735-eea9e9b35bea"
+database_id = "eeaf425c-fdfe-4b60-a96f-f3ebbd58a632"
 
 [[vectorize]]
 binding = "VEC"
@@ -46,7 +46,7 @@ RATE_LIMIT = "100"
 [[env.staging.d1_databases]]
 binding = "DB"
 database_name = "memory-db"
-database_id = "57fc938b-32f0-4594-a735-eea9e9b35bea"
+database_id = "eeaf425c-fdfe-4b60-a96f-f3ebbd58a632"
 
 [[env.staging.vectorize]]
 binding = "VEC"
