@@ -1,20 +1,11 @@
 /** 内存文件目标类型 */
 export type MemoryTarget =
-  | "memory"
-  | "identity"
-  | "user"
-  | "daily"
-  | "bootstrap";
+  "memory" | "identity" | "user" | "daily" | "bootstrap";
 /** 写入模式 */
 export type WriteMode = "append" | "overwrite";
 /** 内存操作类型 */
 export type MemoryAction =
-  | "read"
-  | "write"
-  | "edit"
-  | "delete"
-  | "search"
-  | "list";
+  "read" | "write" | "edit" | "delete" | "search" | "list";
 /** 搜索范围 */
 export type SearchScope = "all" | "global" | "project";
 

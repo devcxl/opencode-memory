@@ -20,12 +20,7 @@ export interface EmbeddingModelConfig {
 }
 
 export type QuantizationDtype =
-  | "fp32"
-  | "fp16"
-  | "q8"
-  | "q4"
-  | "int8"
-  | "uint8";
+  "fp32" | "fp16" | "q8" | "q4" | "int8" | "uint8";
 
 export const VALID_DTYPES: Set<string> = new Set([
   "fp32",

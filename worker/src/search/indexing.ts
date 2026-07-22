@@ -10,9 +10,6 @@ export interface IndexableMemory {
   kind: 'short' | 'long'
   text: string
   created_at: number
-  project_id?: string
-  file_type?: string
-  date?: string | null
 }
 
 export interface IndexingDeps {
@@ -41,9 +38,6 @@ export async function upsertMemoryVector(deps: IndexingDeps, memory: IndexableMe
         user_id: memory.user_id,
         kind: memory.kind,
         created_at: memory.created_at,
-        project_id: memory.project_id || '',
-        file_type: memory.file_type || 'memory',
-        date: memory.date || '',
       },
     }]),
     'memory vector upsert'

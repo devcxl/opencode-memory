@@ -37,8 +37,6 @@ interface QueryOptions {
 /** 混合搜索可选项 */
 interface HybridSearchOptions extends QueryOptions {
   limit?: number
-  file_type?: string
-  project_id?: string
 }
 
 /** 向量搜索结果（已 DB lookup 还原为 Memory） */
@@ -59,13 +57,13 @@ const VECTOR_OVERFETCH_RATIO = 3
 async function retrieveRankedMemories(
   env: Env,
   runAIWithTimeout: <T>(ai: Env['AI'], model: string, input: unknown) => Promise<T>,
-  options: QueryOptions & { embeddingText?: string; file_type?: string; project_id?: string }
+  options: QueryOptions & { embeddingText?: string }
 ): Promise<RankedMemory[]> {
   if (!env.AI || !env.VEC) {
     throw new Error('AI/Vectorize not configured')
   }
 
-  const { query, userId, kind, topK = 8, embeddingText, file_type, project_id } = options
+  const { query, userId, kind, topK = 8, embeddingText } = options
 
   const embedding = await runAIWithTimeout<EmbeddingResponse>(
     env.AI,
@@ -75,8 +73,6 @@ async function retrieveRankedMemories(
 
   const filter: Record<string, string> = { user_id: userId }
   if (kind) filter.kind = kind
-  if (file_type) filter.file_type = file_type
-  if (project_id) filter.project_id = project_id
 
   const results = await env.VEC.query(embedding.data[0], {
     topK: Math.max(topK * VECTOR_OVERFETCH_RATIO, topK),
@@ -183,9 +179,6 @@ function reciprocalRankFusion(
         expires_at: base.expires_at,
         consolidated_at: base.consolidated_at,
         archived: base.archived,
-        project_id: base.project_id || '',
-        file_type: base.file_type || 'memory',
-        date: base.date || null,
         vectorScore: memory?.vectorScore ?? 0,
         score: rrfScore + recencyBoost(base.created_at) * RECENCY_WEIGHT,
       }
@@ -210,13 +203,13 @@ export async function hybridSearch(
   runAIWithTimeout: <T>(ai: Env['AI'], model: string, input: unknown) => Promise<T>,
   options: HybridSearchOptions
 ): Promise<KeywordSearchResult[]> {
-  const { limit = 5, file_type, project_id } = options
+  const { limit = 5 } = options
   const topK = Math.max(limit * 2, options.topK || limit)
   const processed = preprocessQuery(options.query)
 
   // 并行执行两种检索
   const [vectorResults, ftsResults] = await Promise.all([
-    retrieveRankedMemories(env, runAIWithTimeout, { ...options, topK, file_type, project_id })
+    retrieveRankedMemories(env, runAIWithTimeout, { ...options, topK })
       .catch(() => [] as RankedMemory[]),
     processed.tokens.length > 0
       ? searchMemoriesByKeywordForRag(env, {
@@ -224,8 +217,6 @@ export async function hybridSearch(
           userId: options.userId,
           kind: options.kind,
           limit: topK,
-          file_type,
-          project_id,
         }).catch(() => [] as FtsMemoryResult[])
       : Promise.resolve([] as FtsMemoryResult[]),
   ])

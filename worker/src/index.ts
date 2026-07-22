@@ -20,25 +20,18 @@ const memorySchema = z.object({
   text: z.string().min(1).max(10000),
   tags: z.array(z.string()).optional(),
   kind: z.enum(['short', 'long']).optional(),
-  file_type: z.enum(['memory', 'identity', 'user', 'daily']).optional(),
-  project_id: z.string().max(200).optional(),
-  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
 })
 
 const semanticSearchSchema = z.object({
   query: z.string().min(1).max(1000),
   kind: z.enum(['short', 'long']).optional(),
   topK: z.number().int().min(1).max(20).optional(),
-  file_type: z.string().optional(),
-  project_id: z.string().optional(),
 })
 
 const keywordSearchSchema = z.object({
   query: z.string().min(1).max(1000),
   kind: z.enum(['short', 'long']).optional(),
   limit: z.number().int().min(1).max(20).optional(),
-  file_type: z.string().optional(),
-  project_id: z.string().optional(),
 })
 
 const askSchema = z.object({
@@ -190,11 +183,8 @@ app.get('/api/memories', async (c) => {
   const kind = (c.req.query('kind') || 'short') as 'short' | 'long'
   const limit = Math.min(parseInt(c.req.query('limit') || String(DEFAULT_LIMIT)) || DEFAULT_LIMIT, MAX_LIMIT)
   const offset = parseInt(c.req.query('offset') || '0') || 0
-  const project_id = c.req.query('project_id') || ''
-  const file_type = c.req.query('file_type') || ''
-  const date = c.req.query('date') || ''
 
-  const results = await listMemories(c.env, userId, { kind, limit, offset, project_id, file_type, date })
+  const results = await listMemories(c.env, userId, { kind, limit, offset })
   return c.json({ success: true, data: results })
 })
 
@@ -212,8 +202,8 @@ app.post('/api/memories', async (c) => {
     throw new HTTPException(400, { message: `Invalid input: ${validation.error.issues.map(i => i.message).join(', ')}` })
   }
 
-  const { text, tags, kind, file_type, project_id, date } = validation.data
-  const result = await createMemory(c.env, userId, { text, tags, kind, file_type, project_id, date })
+  const { text, tags, kind } = validation.data
+  const result = await createMemory(c.env, userId, { text, tags, kind })
   return c.json({ success: true, data: result })
 })
 
@@ -231,8 +221,8 @@ app.post('/api/memories/search', async (c) => {
     throw new HTTPException(400, { message: `Invalid input: ${validation.error.issues.map(i => i.message).join(', ')}` })
   }
 
-  const { query, topK = 5, kind, file_type, project_id } = validation.data
-  const memories = await searchMemories(c.env, userId, { query, kind, topK, file_type, project_id })
+  const { query, topK = 5, kind } = validation.data
+  const memories = await searchMemories(c.env, userId, { query, kind, topK })
   return c.json({ success: true, data: memories })
 })
 
@@ -354,8 +344,8 @@ app.post('/api/admin/reindex', async (c) => {
   const errors: string[] = []
 
   const { results: memories } = await c.env.DB.prepare(
-    'SELECT id, user_id, kind, text, created_at, project_id, file_type, date FROM memories WHERE archived = 0 ORDER BY created_at DESC'
-  ).all<{ id: string; user_id: string; kind: 'short' | 'long'; text: string; created_at: number; project_id: string; file_type: string; date: string | null }>()
+    'SELECT id, user_id, kind, text, created_at FROM memories WHERE archived = 0 ORDER BY created_at DESC'
+  ).all<{ id: string; user_id: string; kind: 'short' | 'long'; text: string; created_at: number }>()
 
   for (const memory of memories || []) {
     if (!c.env.AI || !c.env.VEC) {

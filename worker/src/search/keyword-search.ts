@@ -7,8 +7,6 @@ interface KeywordSearchOptions {
   userId: string
   kind?: 'short' | 'long'
   limit?: number
-  file_type?: string
-  project_id?: string
 }
 
 interface FtsMemoryRow extends Memory {
@@ -27,7 +25,7 @@ export async function searchMemoriesByKeyword(
   env: Env,
   options: KeywordSearchOptions
 ): Promise<KeywordSearchResult[]> {
-  const { query, userId, kind, limit = 10, file_type, project_id } = options
+  const { query, userId, kind, limit = 10 } = options
   const processed = preprocessQuery(query)
   const matchExpression = buildFtsMatchExpression(processed.tokens)
 
@@ -51,16 +49,6 @@ export async function searchMemoriesByKeyword(
   if (kind) {
     sql += ' AND m.kind = ?'
     bindings.push(kind)
-  }
-
-  if (file_type) {
-    sql += ' AND m.file_type = ?'
-    bindings.push(file_type)
-  }
-
-  if (project_id) {
-    sql += ' AND m.project_id = ?'
-    bindings.push(project_id)
   }
 
   sql += ' ORDER BY rank ASC, m.created_at DESC LIMIT ?'
@@ -89,7 +77,7 @@ export async function searchMemoriesByKeywordForRag(
   env: Env,
   options: KeywordSearchOptions
 ): Promise<FtsMemoryResult[]> {
-  const { query, userId, kind, limit = 10, file_type, project_id } = options
+  const { query, userId, kind, limit = 10 } = options
   const processed = preprocessQuery(query)
   const matchExpression = buildFtsMatchExpression(processed.tokens)
 
@@ -110,16 +98,6 @@ export async function searchMemoriesByKeywordForRag(
   if (kind) {
     sql += ' AND m.kind = ?'
     bindings.push(kind)
-  }
-
-  if (file_type) {
-    sql += ' AND m.file_type = ?'
-    bindings.push(file_type)
-  }
-
-  if (project_id) {
-    sql += ' AND m.project_id = ?'
-    bindings.push(project_id)
   }
 
   sql += ' ORDER BY rank ASC LIMIT ?'

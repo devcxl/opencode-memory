@@ -7,6 +7,6 @@ allowBuilds:
   msgpackr-extract: true
   onnxruntime-node: true
   protobufjs: true
-  sharp: set this to true or false
+  sharp: true
   # sharp: true  # 需要 libvips，CI 环境安装后启用
   workerd: true
