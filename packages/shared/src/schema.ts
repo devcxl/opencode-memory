@@ -26,6 +26,12 @@ export interface Memory {
   archived: number
   /** FTS 分词后的文本，用于全文检索 */
   text_fts?: string
+  /** 项目标识（owner/repo），为空表示全局记忆 */
+  project_id: string
+  /** 文件类型：memory | identity | user | daily */
+  file_type: string
+  /** 日期（YYYY-MM-DD），用于 daily 日志查询 */
+  date?: string | null
 }
 
 export interface RateLimit {
