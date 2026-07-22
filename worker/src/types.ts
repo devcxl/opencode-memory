@@ -26,17 +26,3 @@ export interface Env {
   ALLOWED_ORIGINS?: string
   RATE_LIMIT?: string
 }
-
-export interface McpRequest {
-  jsonrpc: string
-  id: string | number
-  method: string
-  params?: any
-}
-
-export interface McpResponse {
-  jsonrpc: string
-  id: string | number
-  result?: any
-  error?: { code: number; message: string }
-}

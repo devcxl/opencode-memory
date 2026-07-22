@@ -7,17 +7,18 @@
     "deploy": "wrangler deploy",
     "db:migrate": "wrangler d1 migrations apply memory-db",
     "db:create": "wrangler d1 create memory-db",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test src/**/*.test.ts"
   },
   "dependencies": {
     "@cfmem/shared": "workspace:*",
-    "@modelcontextprotocol/sdk": "^1.0.0",
     "hono": "^4.12.0",
     "jose": "^5.9.0",
     "zod": "^3.23.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250109.0",
+    "tsx": "^4.19.0",
     "wrangler": "^4.67.0"
   }
 }

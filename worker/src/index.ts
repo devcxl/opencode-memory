@@ -3,7 +3,6 @@ import { cors } from 'hono/cors'
 import { HTTPException } from 'hono/http-exception'
 import { jwtVerify } from 'jose'
 import { z } from 'zod'
-import { MemoryMCP } from './mcp/agent'
 import { consolidateMemories, cleanupExpiredMemories } from './cron/consolidate'
 import { replaceMemoryIndex } from './search/indexing'
 import { searchMemoriesByKeyword } from './search/keyword-search'
@@ -20,18 +19,25 @@ const memorySchema = z.object({
   text: z.string().min(1).max(10000),
   tags: z.array(z.string()).optional(),
   kind: z.enum(['short', 'long']).optional(),
+  file_type: z.enum(['memory', 'identity', 'user', 'daily']).optional(),
+  project_id: z.string().max(200).optional(),
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
 })
 
 const semanticSearchSchema = z.object({
   query: z.string().min(1).max(1000),
   kind: z.enum(['short', 'long']).optional(),
   topK: z.number().int().min(1).max(20).optional(),
+  file_type: z.string().optional(),
+  project_id: z.string().optional(),
 })
 
 const keywordSearchSchema = z.object({
   query: z.string().min(1).max(1000),
   kind: z.enum(['short', 'long']).optional(),
   limit: z.number().int().min(1).max(20).optional(),
+  file_type: z.string().optional(),
+  project_id: z.string().optional(),
 })
 
 const askSchema = z.object({
@@ -157,7 +163,7 @@ async function verifyJWT(token: string, env: Env): Promise<JWTPayload> {
   }
 }
 
-// 认证 + 限流中间件（/api/* 和 /mcp 共用）
+// 认证 + 限流中间件（/api/* 共用）
 const authMiddleware: MiddlewareHandler<{ Bindings: Env; Variables: Variables }> = async (c, next) => {
   const auth = c.req.header('Authorization')
   if (!auth?.startsWith('Bearer ')) {
@@ -176,15 +182,17 @@ const authMiddleware: MiddlewareHandler<{ Bindings: Env; Variables: Variables }>
 }
 
 app.use('/api/*', authMiddleware)
-app.use('/mcp', authMiddleware)
 
 app.get('/api/memories', async (c) => {
   const userId = c.get('userId') as string
   const kind = (c.req.query('kind') || 'short') as 'short' | 'long'
   const limit = Math.min(parseInt(c.req.query('limit') || String(DEFAULT_LIMIT)) || DEFAULT_LIMIT, MAX_LIMIT)
   const offset = parseInt(c.req.query('offset') || '0') || 0
+  const project_id = c.req.query('project_id') || ''
+  const file_type = c.req.query('file_type') || ''
+  const date = c.req.query('date') || ''
 
-  const results = await listMemories(c.env, userId, { kind, limit, offset })
+  const results = await listMemories(c.env, userId, { kind, limit, offset, project_id, file_type, date })
   return c.json({ success: true, data: results })
 })
 
@@ -202,8 +210,8 @@ app.post('/api/memories', async (c) => {
     throw new HTTPException(400, { message: `Invalid input: ${validation.error.issues.map(i => i.message).join(', ')}` })
   }
 
-  const { text, tags, kind } = validation.data
-  const result = await createMemory(c.env, userId, { text, tags, kind })
+  const { text, tags, kind, file_type, project_id, date } = validation.data
+  const result = await createMemory(c.env, userId, { text, tags, kind, file_type, project_id, date })
   return c.json({ success: true, data: result })
 })
 
@@ -221,8 +229,8 @@ app.post('/api/memories/search', async (c) => {
     throw new HTTPException(400, { message: `Invalid input: ${validation.error.issues.map(i => i.message).join(', ')}` })
   }
 
-  const { query, topK = 5, kind } = validation.data
-  const memories = await searchMemories(c.env, userId, { query, kind, topK })
+  const { query, topK = 5, kind, file_type, project_id } = validation.data
+  const memories = await searchMemories(c.env, userId, { query, kind, topK, file_type, project_id })
   return c.json({ success: true, data: memories })
 })
 
@@ -296,32 +304,7 @@ app.get('/api/stats', async (c) => {
   return c.json({ success: true, data: stats })
 })
 
-app.post('/mcp', async (c) => {
-  const userId = c.get('userId') as string
-
-  // Limit request body size to 10KB to prevent DoS
-  const contentLength = c.req.header('Content-Length')
-  if (contentLength && parseInt(contentLength) > 10240) {
-    throw new HTTPException(413, { message: 'Payload too large - max 10KB' })
-  }
-
-  const body = await c.req.json()
-
-  const mcp = new MemoryMCP(c.env, userId)
-  const response = await mcp.handleRequest(body)
-
-  return c.json(response)
-})
-
-// SSE endpoint temporarily disabled due to Miniflare bug
-app.get('/mcp', async (c) => {
-  return c.json({
-    jsonrpc: '2.0',
-    error: { code: -32601, message: 'SSE not available in dev mode' }
-  }, 501)
-})
-
-// 返回用户记忆摘要，用于 OpenCode 插件注入 system prompt
+// 重新索引所有现有记忆到 Vectorize（管理员功能）
 app.get('/api/context', async (c) => {
   const userId = c.get('userId') as string
   const projectId = c.req.query('project_id') || ''
@@ -344,8 +327,8 @@ app.post('/api/admin/reindex', async (c) => {
   const errors: string[] = []
 
   const { results: memories } = await c.env.DB.prepare(
-    'SELECT id, user_id, kind, text, created_at FROM memories WHERE archived = 0 ORDER BY created_at DESC'
-  ).all<{ id: string; user_id: string; kind: 'short' | 'long'; text: string; created_at: number }>()
+    'SELECT id, user_id, kind, text, created_at, project_id, file_type, date FROM memories WHERE archived = 0 ORDER BY created_at DESC'
+  ).all<{ id: string; user_id: string; kind: 'short' | 'long'; text: string; created_at: number; project_id: string; file_type: string; date: string | null }>()
 
   for (const memory of memories || []) {
     if (!c.env.AI || !c.env.VEC) {
