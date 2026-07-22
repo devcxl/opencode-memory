@@ -301,19 +301,9 @@ app.delete('/api/memories/:id', async (c) => {
 
 app.get('/api/stats', async (c) => {
   const userId = c.get('userId') as string
-
-  const [shortRes, longRes] = await Promise.all([
-    c.env.DB.prepare('SELECT COUNT(*) as count FROM memories WHERE user_id = ? AND kind = ? AND archived = 0').bind(userId, 'short').first(),
-    c.env.DB.prepare('SELECT COUNT(*) as count FROM memories WHERE user_id = ? AND kind = ? AND archived = 0').bind(userId, 'long').first(),
-  ])
-
-  return c.json({
-    success: true,
-    data: {
-      shortCount: (shortRes as any).count,
-      longCount: (longRes as any).count,
-    }
-  })
+  const projectId = c.req.query('project_id')
+  const stats = await getStatsRaw(c.env, userId, projectId || undefined)
+  return c.json({ success: true, data: stats })
 })
 
 app.post('/mcp', async (c) => {
@@ -344,39 +334,8 @@ app.get('/mcp', async (c) => {
 // 返回用户记忆摘要，用于 OpenCode 插件注入 system prompt
 app.get('/api/context', async (c) => {
   const userId = c.get('userId') as string
-
-  const [longTerm, recent, stats] = await Promise.all([
-    c.env.DB.prepare(
-      'SELECT text, created_at FROM memories WHERE user_id = ? AND kind = ? AND archived = 0 ORDER BY created_at DESC LIMIT 10'
-    ).bind(userId, 'long').all<{ text: string; created_at: number }>(),
-    c.env.DB.prepare(
-      'SELECT text, created_at FROM memories WHERE user_id = ? AND kind = ? AND archived = 0 ORDER BY created_at DESC LIMIT 5'
-    ).bind(userId, 'short').all<{ text: string; created_at: number }>(),
-    c.env.DB.prepare(
-      "SELECT kind, COUNT(*) as count FROM memories WHERE user_id = ? AND archived = 0 GROUP BY kind"
-    ).bind(userId).all<{ kind: string; count: number }>(),
-  ])
-
-  const statsMap: Record<string, number> = {}
-  for (const row of stats.results || []) {
-    statsMap[row.kind] = row.count
-  }
-
-  const fmtMemories = (label: string, items: { text: string; created_at: number }[]) => {
-    if (!items || items.length === 0) return ''
-    const rows = items.map(m => {
-      const date = new Date(m.created_at).toISOString().slice(0, 10)
-      return `- ${m.text.slice(0, 200)} (${date})`
-    }).join('\n')
-    return `\n## ${label}\n\n${rows}`
-  }
-
-  const context = [
-    `Memory stats: ${statsMap['long'] || 0} long-term, ${statsMap['short'] || 0} short-term memories.`,
-    fmtMemories('Recent long-term memories', longTerm.results || []),
-    fmtMemories('Recent short-term memories', recent.results || []),
-  ].filter(Boolean).join('\n')
-
+  const projectId = c.req.query('project_id') || ''
+  const context = await buildContext(c.env, userId, projectId)
   return c.json({ success: true, data: context })
 })
 
@@ -433,6 +392,84 @@ app.post('/api/admin/reindex', async (c) => {
 })
 
 app.get('/health', (c) => c.text('OK'))
+
+// ── 导出函数（供测试和路由复用）──
+
+/**
+ * 构建注入 system prompt 的记忆上下文
+ * 按 file_type 分类：MEMORY.md > IDENTITY.md > USER.md
+ * @param projectId 为空字符串时查询全局记忆（不按 project 过滤）
+ */
+export async function buildContext(env: Env, userId: string, projectId: string): Promise<string> {
+  const queries = [
+    // MEMORY.md（全局 + 项目，支持项目过滤）
+    env.DB.prepare(
+      `SELECT text, created_at FROM memories
+       WHERE user_id = ? AND file_type = 'memory' AND kind = 'long'
+         AND (project_id = ? OR ? = '')
+         AND archived = 0
+       ORDER BY created_at DESC LIMIT 10`
+    ).bind(userId, projectId, projectId).all<{ text: string; created_at: number }>(),
+
+    // IDENTITY.md（全局，不按项目过滤）
+    env.DB.prepare(
+      `SELECT text, created_at FROM memories
+       WHERE user_id = ? AND file_type = 'identity' AND kind = 'long'
+         AND archived = 0
+       ORDER BY created_at DESC LIMIT 1`
+    ).bind(userId).all<{ text: string; created_at: number }>(),
+
+    // USER.md（全局，不按项目过滤）
+    env.DB.prepare(
+      `SELECT text, created_at FROM memories
+       WHERE user_id = ? AND file_type = 'user' AND kind = 'long'
+         AND archived = 0
+       ORDER BY created_at DESC LIMIT 1`
+    ).bind(userId).all<{ text: string; created_at: number }>(),
+  ]
+
+  const [memoryRows, identityRows, userRows] = await Promise.all(queries)
+
+  const fmtSection = (title: string, items: { text: string; created_at: number }[]): string => {
+    if (!items || items.length === 0) return ''
+    const content = items.map(r => {
+      const date = new Date(r.created_at).toISOString().replace('T', ' ').slice(0, 19)
+      return `<!-- ${date} -->\n${r.text}`
+    }).join('\n\n')
+    return `## ${title}\n\n${content}`
+  }
+
+  const sections = [
+    fmtSection('MEMORY.md', memoryRows.results || []),
+    fmtSection('IDENTITY.md', identityRows.results || []),
+    fmtSection('USER.md', userRows.results || []),
+  ].filter(Boolean)
+
+  return sections.join('\n\n---\n\n')
+}
+
+/**
+ * 获取记忆统计信息
+ * @param projectId 可选，按 project 过滤统计
+ */
+export async function getStatsRaw(env: Env, userId: string, projectId?: string): Promise<{ shortCount: number; longCount: number }> {
+  const projectFilter = projectId ? ' AND project_id = ?' : ''
+  const bindingsBase = projectId ? [userId, projectId] : [userId]
+
+  const [shortRow, longRow] = await Promise.all([
+    env.DB.prepare(
+      `SELECT COUNT(*) as count FROM memories WHERE user_id = ? AND kind = 'short' AND archived = 0${projectFilter}`
+    ).bind(...bindingsBase).first<{ count: number } | undefined>(),
+    env.DB.prepare(
+      `SELECT COUNT(*) as count FROM memories WHERE user_id = ? AND kind = 'long' AND archived = 0${projectFilter}`
+    ).bind(...bindingsBase).first<{ count: number } | undefined>(),
+  ])
+
+  return {
+    shortCount: shortRow?.count ?? 0,
+    longCount: longRow?.count ?? 0,
+  }
+}
 
 export default {
   fetch: app.fetch,
