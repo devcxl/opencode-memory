@@ -22,6 +22,7 @@ mock.module("../src/search/embedding.js", () => ({
   getEmbedder: async () => ({}),
   getCurrentDtype: () => currentDtype,
   getCurrentModelId: () => currentModelId,
+  getEmbeddingDimensions: () => 384,
   initEmbedder: async () => {},
   isInitialized: async () => true,
 }));

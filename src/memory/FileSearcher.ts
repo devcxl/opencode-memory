@@ -7,6 +7,7 @@ import type {
   MonthGroup,
   SearchScope,
 } from "../types.js";
+import type { MemoryMode } from "../providers/factory.js";
 import { embedText } from "../search/embedding.js";
 import {
   extractTimestamps,
@@ -21,6 +22,7 @@ export class FileSearcher {
     private dailyDir: string,
     private readFile: (filePath: string) => string | null,
     private getProjectStore: (projectId: string) => ProjectStore,
+    private mode: MemoryMode = "local",
   ) {}
 
   /**

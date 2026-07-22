@@ -9,9 +9,9 @@ import type {
   MonthGroup,
 } from "../types.js";
 import type { MemoryConfig } from "../config/runtime.js";
+import type { Providers, MemoryMode } from "../providers/factory.js";
 import { ensureDir, readFileSafe } from "../utils/fs.js";
 import { MemoryPaths } from "./MemoryPaths.js";
-import { atomicWrite } from "../utils/atomicWrite.js";
 import {
   checkLineLimit,
   normalizeDailyDate,
@@ -19,38 +19,53 @@ import {
 } from "../utils/validation.js";
 import { gitCommit } from "../utils/git.js";
 import {
-  embedText,
   getCurrentDtype,
-  getCurrentModelId,
 } from "../search/embedding.js";
 import { chunkMarkdown } from "../search/chunker.js";
 import {
-  upsertFile,
-  deleteFileVectors,
   ProjectStore,
   refreshStaleIndices,
 } from "../search/vector-store.js";
 import { parseContentByTimestamp } from "../utils/timestampParser.js";
 import { StateChecker } from "./StateChecker.js";
 import { FileSearcher } from "./FileSearcher.js";
+import { LocalVectorIndexProvider } from "../providers/local/VectorIndexProvider.js";
+import { LocalEmbeddingProvider } from "../providers/local/EmbeddingProvider.js";
+import { LocalFileStorageProvider } from "../providers/local/FileStorageProvider.js";
 
 /** 内存系统的核心管理器，统一管理文件读写、向量索引、语义搜索、状态检查等能力 */
 export class MemoryManager {
   private config: MemoryConfig;
   private paths: MemoryPaths;
+  private providers: Providers;
+  private mode: MemoryMode;
   private projectStores: Map<string, ProjectStore> = new Map();
   private stateChecker: StateChecker;
   private fileSearcher: FileSearcher;
 
-  constructor(config: MemoryConfig) {
+  constructor(config: MemoryConfig, providers?: Providers) {
     this.config = config;
     this.paths = new MemoryPaths(config.memoryDir);
+    this.mode = config.mode ?? "local";
+
+    if (providers) {
+      this.providers = providers;
+    } else {
+      // 未注入 providers 时自动创建本地 Provider，保证向后兼容
+      this.providers = {
+        vectorIndex: new LocalVectorIndexProvider(config),
+        embedding: new LocalEmbeddingProvider(),
+        fileStorage: new LocalFileStorageProvider(config),
+      };
+    }
+
     this.stateChecker = new StateChecker(config.memoryDir);
     this.fileSearcher = new FileSearcher(
       config.memoryDir,
       this.paths.dailyDir,
       (p) => this.readFile(p),
       (id) => this.getProjectStore(id),
+      this.mode,
     );
   }
 
@@ -71,7 +86,7 @@ export class MemoryManager {
     if (stalePaths.length === 0) return;
 
     for (const filePath of stalePaths) {
-      const content = this.readFile(filePath);
+      const content = await this.providers.fileStorage.readFile(filePath);
       if (!content) continue;
       try {
         await this.embedAndIndex(filePath, content);
@@ -155,6 +170,19 @@ export class MemoryManager {
     date?: string,
     project?: string | null,
   ): { filePath: string; displayName: string } {
+    // remote 模式：返回 "file_type:date:project_id" 格式，供 Worker API 解析
+    if (this.mode === "remote") {
+      const fileType = target;
+      const effectiveDate =
+        target === "daily"
+          ? (normalizeDailyDate(date) ?? this.todayStr())
+          : "";
+      const effectiveProject = project ?? "";
+      const filePath = `${fileType}:${effectiveDate}:${effectiveProject}`;
+      return { filePath, displayName: filePath };
+    }
+
+    // local 模式：保持现有逻辑不变
     switch (target) {
       case "memory": {
         if (project) {
@@ -220,7 +248,7 @@ export class MemoryManager {
     oldString: string,
     newString: string,
   ): Promise<void> {
-    const content = this.readFile(filePath);
+    const content = await this.providers.fileStorage.readFile(filePath);
     if (!content) {
       throw new Error("File not found or empty");
     }
@@ -260,7 +288,7 @@ export class MemoryManager {
       date,
       project,
     );
-    const content = this.readFile(filePath);
+    const content = await this.providers.fileStorage.readFile(filePath);
 
     if (!content) {
       throw new Error(`${displayName} not found or empty`);
@@ -293,7 +321,7 @@ export class MemoryManager {
    * 用于 daily log 等持续追加的场景，并保持向量索引与 git 提交一致
    */
   async appendFile(filePath: string, content: string): Promise<void> {
-    const existing = this.readFile(filePath);
+    const existing = await this.providers.fileStorage.readFile(filePath);
     const separator = existing?.trim() ? "\n\n" : "";
     const timestamp = this.getLocalTimestamp();
     const stamped = `<!-- ${timestamp} -->\n${content}`;
@@ -351,9 +379,9 @@ export class MemoryManager {
    * 将文件内容分块、向量化并写入向量存储，供语义搜索使用。
    *
    * 路由规则：
-   * - 文件路径位于 projects/ 子目录下 → 写入对应 project 的 ProjectStore
-   * - 文件名称包含 daily → 写入全局 daily 索引
-   * - 其余文件 → 写入全局 root 索引
+   * - 文件路径位于 projects/ 子目录下 → 写入对应 project namespace
+   * - 文件名称包含 daily → 写入全局 daily namespace
+   * - 其余文件 → 写入全局 root namespace
    *
    * 静默跳过 embedding 引擎未初始化的错误（如插件刚安装尚未下载模型），
    * 因为此时写入不影响数据持久性，后续模型加载后会重建索引。
@@ -364,33 +392,36 @@ export class MemoryManager {
   ): Promise<void> {
     try {
       const chunks = chunkMarkdown(content, filePath);
-      const embeddingModel = getCurrentModelId();
-      const embeddingDtype = getCurrentDtype();
-      // 并行嵌入所有切片，减少 embedding 等待时间
-      const embedded = await Promise.all(
-        chunks.map(async (chunk) => ({
-          vector: await embedText(chunk.text),
-          metadata: {
-            filePath,
-            heading: chunk.heading,
-            text: chunk.text,
-            hash: chunk.hash,
-            embeddingModel,
-            embeddingDtype,
-            ...(chunk.timestamp ? { timestamp: chunk.timestamp } : {}),
-          },
-        })),
-      );
+      const embeddingModel = this.providers.embedding.modelId;
+
+      // 批量嵌入所有切片
+      const texts = chunks.map((c) => c.text);
+      const vectors = await this.providers.embedding.embedTexts(texts);
+
+      const embedded = chunks.map((chunk, idx) => ({
+        vector: vectors[idx],
+        metadata: {
+          filePath,
+          heading: chunk.heading,
+          text: chunk.text,
+          hash: chunk.hash,
+          embeddingModel,
+          embeddingDtype: getCurrentDtype(),
+          ...(chunk.timestamp ? { timestamp: chunk.timestamp } : {}),
+        },
+      }));
 
       const projectId = this.extractProjectId(filePath);
       if (projectId) {
-        const store = this.getProjectStore(projectId);
-        await store.upsertFile(filePath, embedded);
+        await this.providers.vectorIndex.upsert(embedded, `project/${projectId}`);
         return;
       }
 
-      // 非项目文件写入全局索引（root/daily 由 upsertFile 内部按路径区分）
-      await upsertFile(filePath, embedded);
+      // 非项目文件写入全局索引（root/daily 由 namespace 区分）
+      const namespace = filePath.includes(`${path.sep}daily${path.sep}`)
+        ? "daily"
+        : "root";
+      await this.providers.vectorIndex.upsert(embedded, namespace);
     } catch (err) {
       const errMsg = (err as Error).message;
       // embedding 引擎未初始化时静默跳过，不阻塞写入操作
@@ -402,30 +433,38 @@ export class MemoryManager {
 
   /**
    * 写入文件、更新向量索引、提交 git 三合一操作
-   * 所有写入/编辑/删除/追加方法在修改文件后均执行此流程
+   * 所有写入/编辑/删除/追加方法在修改文件后均执行此流程。
+   *
+   * local 模式：写入文件 + embed/index + git commit
+   * remote 模式：写入文件（Worker 侧自动 embed/index），跳过 git commit
    */
   private async persistAndIndex(
     filePath: string,
     content: string,
     operation: string,
   ): Promise<void> {
-    atomicWrite(filePath, content);
-    await this.embedAndIndex(filePath, content);
+    await this.providers.fileStorage.writeFile(filePath, content);
 
-    // 推导对应的向量索引路径，确保索引文件也被 git 追踪
-    const indexPaths: string[] = [];
-    const projectId = this.extractProjectId(filePath);
-    if (projectId) {
-      indexPaths.push(
-        path.join(this.paths.projectsDir, projectId, "root.index"),
-      );
-    } else if (filePath.includes(path.sep + "daily" + path.sep)) {
-      indexPaths.push(this.paths.dailyIndexPath);
-    } else {
-      indexPaths.push(this.paths.rootIndexPath);
+    // local 模式：本地 embed + index + git commit
+    if (this.mode === "local") {
+      await this.embedAndIndex(filePath, content);
+
+      // 推导对应的向量索引路径，确保索引文件也被 git 追踪
+      const indexPaths: string[] = [];
+      const projectId = this.extractProjectId(filePath);
+      if (projectId) {
+        indexPaths.push(
+          path.join(this.paths.projectsDir, projectId, "root.index"),
+        );
+      } else if (filePath.includes(path.sep + "daily" + path.sep)) {
+        indexPaths.push(this.paths.dailyIndexPath);
+      } else {
+        indexPaths.push(this.paths.rootIndexPath);
+      }
+
+      await gitCommit(operation, filePath, this.config.memoryDir, indexPaths);
     }
-
-    await gitCommit(operation, filePath, this.config.memoryDir, indexPaths);
+    // remote 模式：Worker 侧自动 embed + index，无需本地 git commit
   }
 
   /**
