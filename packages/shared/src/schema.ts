@@ -34,6 +34,88 @@ export interface Memory {
   date?: string | null
 }
 
+// ============================================================
+// 结构化记忆类型（0007_migration）
+// ============================================================
+
+export type InstructionType = 'identity' | 'rule' | 'workflow'
+export type LearningType = 'preference' | 'episodic' | 'knowledge'
+export type MemoryScope = 'global' | 'project' | 'user' | 'local'
+export type LearningSource = 'manual' | 'extracted' | 'imported'
+
+export interface Instruction {
+  id: string
+  user_id: string
+  type: InstructionType
+  title: string
+  content: string
+  scope: MemoryScope
+  project_id: string
+  path_pattern?: string | null
+  priority: number
+  tags: string
+  created_at: number
+  updated_at?: number | null
+  archived: number
+}
+
+export interface Learning {
+  id: string
+  user_id: string
+  type: LearningType
+  title: string
+  content: string
+  content_fts?: string | null
+  scope: MemoryScope
+  project_id: string
+  source: LearningSource
+  source_ids?: string | null
+  confidence: number
+  tags: string
+  recall_count: number
+  last_recalled_at?: number | null
+  created_at: number
+  updated_at?: number | null
+  archived: number
+}
+
+export interface Daily {
+  id: string
+  user_id: string
+  content: string
+  content_fts?: string | null
+  project_id: string
+  date: string
+  extracted: number
+  extracted_at?: number | null
+  tags: string
+  created_at: number
+  archived: number
+}
+
+export interface Project {
+  id: string
+  user_id: string
+  name?: string | null
+  instruction_count: number
+  learning_count: number
+  daily_count: number
+  last_active_at?: number | null
+  created_at: number
+}
+
+export interface ExtractionLog {
+  id: string
+  user_id: string
+  started_at: number
+  completed_at?: number | null
+  daily_count: number
+  extracted_count: number
+  status: 'running' | 'completed' | 'failed'
+  error?: string | null
+  created_at: number
+}
+
 export interface RateLimit {
   /** SQLite 自增主键 */
   id?: number

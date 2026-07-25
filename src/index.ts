@@ -230,12 +230,53 @@ export const MemoryPlugin: Plugin = async (ctx: PluginInput) => {
         ].join("\n"),
         args: {
           action: tool.schema
-            .enum(["read", "write", "edit", "delete", "search", "list"])
+            .enum([
+              "read",
+              "write",
+              "edit",
+              "delete",
+              "search",
+              "list",
+              "extract",
+            ])
             .describe("Action to perform"),
           target: tool.schema
             .enum(["memory", "identity", "user", "daily"])
             .optional()
-            .describe("Target file: memory, identity, user, or daily"),
+            .describe(
+              "Target file: memory, identity, user, or daily (backward compatible)",
+            ),
+          category: tool.schema
+            .enum(["instruction", "learning", "daily"])
+            .optional()
+            .describe(
+              "Memory category: instruction (rules/workflows), learning (knowledge/preferences), daily (logs)",
+            ),
+          sub_type: tool.schema
+            .enum([
+              "identity",
+              "rule",
+              "workflow",
+              "preference",
+              "episodic",
+              "knowledge",
+            ])
+            .optional()
+            .describe(
+              "Sub-type for instruction (identity/rule/workflow) or learning (preference/episodic/knowledge)",
+            ),
+          title: tool.schema
+            .string()
+            .optional()
+            .describe(
+              "Title for instruction or learning (for structured memory)",
+            ),
+          path_pattern: tool.schema
+            .string()
+            .optional()
+            .describe(
+              "Glob pattern for path-scoped rule loading (e.g. 'src/api/**')",
+            ),
           content: tool.schema
             .string()
             .optional()

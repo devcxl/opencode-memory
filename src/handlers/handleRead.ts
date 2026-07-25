@@ -2,19 +2,18 @@ import type { MemoryManager } from "../memory/MemoryManager.js";
 import { handleList } from "./handleList.js";
 import { toErrorMessage } from "../utils/fs.js";
 
-/**
- * 读取指定目标的内存文件内容。
- * 未指定 target 时回退到 list 行为，避免静默失败。
- *
- * @param params - target、date、project
- * @param memoryManager - MemoryManager 实例
- * @returns 文件内容字符串，或错误提示
- */
 export async function handleRead(
-  params: { target?: string; date?: string; project?: string },
+  params: {
+    target?: string;
+    date?: string;
+    project?: string;
+    category?: string;
+    sub_type?: string;
+    scope?: string;
+  },
   memoryManager: MemoryManager,
 ): Promise<string> {
-  const { target, date, project } = params;
+  const { target, date, project, category, sub_type, scope } = params;
 
   if (!target) {
     return handleList({}, memoryManager);
@@ -25,6 +24,9 @@ export async function handleRead(
       target,
       date,
       project || undefined,
+      category,
+      sub_type,
+      scope,
     );
     const scopeTag = project
       ? `[scope: project/${project}]`

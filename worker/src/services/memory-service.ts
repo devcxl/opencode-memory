@@ -1,5 +1,6 @@
 import { deleteMemoryIndex, replaceMemoryIndex, upsertMemoryVector, type IndexableMemory } from '../search/indexing'
 import { hybridSearch } from '../search/hybrid'
+import { crossTableSearch } from '../search/cross-table'
 import { segmentForIndex } from '../search/tokenizer'
 import { runAIWithTimeout } from '../utils/ai'
 import { withRetry } from '../utils/retry'
@@ -101,12 +102,11 @@ export async function searchMemories(
   options: SearchMemoriesOptions
 ): Promise<KeywordSearchResult[]> {
   const { query, topK = 5, kind, file_type, project_id } = options
-  return hybridSearch(env, runAIWithTimeout, {
+  return crossTableSearch(env, runAIWithTimeout, {
     query,
     userId,
     kind,
     topK,
-    limit: topK,
     file_type,
     project_id,
   })

@@ -160,4 +160,194 @@ export class MemoryClient {
     const data = await this.handleResponse<string>(res);
     return data || "";
   }
+
+  // ── 结构化记忆端点 ──
+
+  async createInstruction(params: {
+    type: string;
+    title: string;
+    content: string;
+    scope?: string;
+    project_id?: string;
+    path_pattern?: string;
+    priority?: number;
+    tags?: string[];
+  }): Promise<{ id: string }> {
+    const res = await fetch(`${this.config.apiUrl}/api/instructions`, {
+      method: "POST",
+      headers: this.headers,
+      body: JSON.stringify(params),
+    });
+    return this.handleResponse<{ id: string }>(res);
+  }
+
+  async listInstructions(params: {
+    type?: string;
+    scope?: string;
+    project_id?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<InstructionRecord[]> {
+    const url = new URL(`${this.config.apiUrl}/api/instructions`);
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== undefined && value !== "") {
+        url.searchParams.set(key, String(value));
+      }
+    }
+    const res = await fetch(url.toString(), {
+      headers: { Authorization: this.headers.Authorization },
+    });
+    return this.handleListResponse<InstructionRecord[]>(res);
+  }
+
+  async getInstruction(id: string): Promise<InstructionRecord | null> {
+    const res = await fetch(`${this.config.apiUrl}/api/instructions/${id}`, {
+      headers: { Authorization: this.headers.Authorization },
+    });
+    return this.handleResponse<InstructionRecord | null>(res);
+  }
+
+  async deleteInstruction(id: string): Promise<void> {
+    const res = await fetch(`${this.config.apiUrl}/api/instructions/${id}`, {
+      method: "DELETE",
+      headers: this.headers,
+    });
+    await this.handleResponse<unknown>(res);
+  }
+
+  async createLearning(params: {
+    type: string;
+    title: string;
+    content: string;
+    scope?: string;
+    project_id?: string;
+    source?: string;
+    source_ids?: string[];
+    confidence?: number;
+    tags?: string[];
+  }): Promise<{ id: string }> {
+    const res = await fetch(`${this.config.apiUrl}/api/learnings`, {
+      method: "POST",
+      headers: this.headers,
+      body: JSON.stringify(params),
+    });
+    return this.handleResponse<{ id: string }>(res);
+  }
+
+  async listLearnings(params: {
+    type?: string;
+    source?: string;
+    scope?: string;
+    project_id?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<LearningRecord[]> {
+    const url = new URL(`${this.config.apiUrl}/api/learnings`);
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== undefined && value !== "") {
+        url.searchParams.set(key, String(value));
+      }
+    }
+    const res = await fetch(url.toString(), {
+      headers: { Authorization: this.headers.Authorization },
+    });
+    return this.handleListResponse<LearningRecord[]>(res);
+  }
+
+  async getLearning(id: string): Promise<LearningRecord | null> {
+    const res = await fetch(`${this.config.apiUrl}/api/learnings/${id}`, {
+      headers: { Authorization: this.headers.Authorization },
+    });
+    return this.handleResponse<LearningRecord | null>(res);
+  }
+
+  async deleteLearning(id: string): Promise<void> {
+    const res = await fetch(`${this.config.apiUrl}/api/learnings/${id}`, {
+      method: "DELETE",
+      headers: this.headers,
+    });
+    await this.handleResponse<unknown>(res);
+  }
+
+  async createDaily(params: {
+    content: string;
+    project_id?: string;
+    date?: string;
+    tags?: string[];
+  }): Promise<{ id: string }> {
+    const res = await fetch(`${this.config.apiUrl}/api/dailies`, {
+      method: "POST",
+      headers: this.headers,
+      body: JSON.stringify(params),
+    });
+    return this.handleResponse<{ id: string }>(res);
+  }
+
+  async listDailies(params: {
+    project_id?: string;
+    date?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<DailyRecord[]> {
+    const url = new URL(`${this.config.apiUrl}/api/dailies`);
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== undefined && value !== "") {
+        url.searchParams.set(key, String(value));
+      }
+    }
+    const res = await fetch(url.toString(), {
+      headers: { Authorization: this.headers.Authorization },
+    });
+    return this.handleListResponse<DailyRecord[]>(res);
+  }
+
+  async deleteDaily(id: string): Promise<void> {
+    const res = await fetch(`${this.config.apiUrl}/api/dailies/${id}`, {
+      method: "DELETE",
+      headers: this.headers,
+    });
+    await this.handleResponse<unknown>(res);
+  }
+}
+
+interface InstructionRecord {
+  id: string;
+  user_id: string;
+  type: string;
+  title: string;
+  content: string;
+  scope: string;
+  project_id: string;
+  path_pattern?: string | null;
+  priority: number;
+  tags: string;
+  created_at: number;
+  archived: number;
+}
+
+interface LearningRecord {
+  id: string;
+  user_id: string;
+  type: string;
+  title: string;
+  content: string;
+  scope: string;
+  project_id: string;
+  source: string;
+  confidence: number;
+  tags: string;
+  created_at: number;
+  archived: number;
+}
+
+interface DailyRecord {
+  id: string;
+  user_id: string;
+  content: string;
+  project_id: string;
+  date: string;
+  extracted: number;
+  tags: string;
+  created_at: number;
+  archived: number;
 }

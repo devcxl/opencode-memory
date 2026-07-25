@@ -321,50 +321,47 @@ describe("RemoteFileStorageProvider", () => {
         return mockResponse(200, { success: true, data: { id: "m1", indexed: true } });
       }) as unknown as typeof fetch;
 
-      await provider.writeFile("memory:2026-07-22:owner/repo", "新记忆内容");
+      await provider.writeFile("learning:knowledge:project:owner/repo:2026-07-22", "新记忆内容");
 
-      expect(capturedBody.text).toBe("新记忆内容");
-      expect(capturedBody.file_type).toBe("memory");
-      expect(capturedBody.date).toBe("2026-07-22");
+      expect(capturedBody.type).toBe("knowledge");
+      expect(capturedBody.content).toBe("新记忆内容");
+      expect(capturedBody.scope).toBe("project");
       expect(capturedBody.project_id).toBe("owner/repo");
     });
   });
 
   describe("appendFile", () => {
-    test("等同于 writeFile 调用 POST /api/memories", async () => {
+    test("等同于 writeFile 调用 POST /api/dailies", async () => {
       let capturedText = "";
 
       globalThis.fetch = mock((_input: RequestInfo | URL, init?: RequestInit): Response => {
-        if (init?.body) capturedText = JSON.parse(init.body as string).text;
-        return mockResponse(200, { success: true, data: { id: "m1", indexed: true } });
+        if (init?.body) capturedText = JSON.parse(init.body as string).content;
+        return mockResponse(200, { success: true, data: { id: "m1" } });
       }) as unknown as typeof fetch;
 
-      await provider.appendFile("daily:2026-07-22:", "今日日志");
+      await provider.appendFile("daily:::2026-07-22", "今日日志");
 
       expect(capturedText).toBe("今日日志");
     });
   });
 
   describe("readFile", () => {
-    test("调用 GET /api/memories 并拼接结果", async () => {
+    test("调用 GET /api/learnings 并拼接结果", async () => {
       globalThis.fetch = mock((input: RequestInfo | URL, _init?: RequestInit): Response => {
-        const url = new URL(input.toString());
-        // 验证查询参数
         return mockResponse(200, {
           success: true,
           data: [
-            { id: "1", user_id: "u1", kind: "long", text: "条目1", tags: "[]", created_at: 1712345678000, archived: 0 },
-            { id: "2", user_id: "u1", kind: "long", text: "条目2", tags: "[]", created_at: 1712345679000, archived: 0 },
+            { id: "1", title: "条目1", content: "条目1内容", created_at: 1712345678000 },
+            { id: "2", title: "条目2", content: "条目2内容", created_at: 1712345679000 },
           ],
         });
       }) as unknown as typeof fetch;
 
-      const result = await provider.readFile("memory:2026-07-22:owner/repo");
+      const result = await provider.readFile("learning:knowledge:project:owner/repo:2026-07-22");
 
       expect(result).not.toBeNull();
-      expect(result).toContain("条目1");
-      expect(result).toContain("条目2");
-      // 格式：<!-- timestamp -->\ncontent
+      expect(result).toContain("条目1内容");
+      expect(result).toContain("条目2内容");
       expect(result).toContain("<!--");
     });
 
@@ -373,7 +370,7 @@ describe("RemoteFileStorageProvider", () => {
         return mockResponse(200, { success: true, data: [] });
       }) as unknown as typeof fetch;
 
-      const result = await provider.readFile("memory:2026-07-22:owner/repo");
+      const result = await provider.readFile("learning:knowledge:project:owner/repo:2026-07-22");
       expect(result).toBeNull();
     });
 
@@ -382,7 +379,7 @@ describe("RemoteFileStorageProvider", () => {
         return mockResponse(200, { success: false, data: null });
       }) as unknown as typeof fetch;
 
-      const result = await provider.readFile("memory:2026-07-22:owner/repo");
+      const result = await provider.readFile("learning:knowledge:project:owner/repo:2026-07-22");
       expect(result).toBeNull();
     });
   });
@@ -397,17 +394,16 @@ describe("RemoteFileStorageProvider", () => {
           deletedIds.push(id);
           return mockResponse(200, { success: true });
         }
-        // GET /api/memories
         return mockResponse(200, {
           success: true,
           data: [
-            { id: "a1", user_id: "u1", kind: "long", text: "x", tags: "[]", created_at: 1, archived: 0 },
-            { id: "a2", user_id: "u1", kind: "long", text: "x", tags: "[]", created_at: 1, archived: 0 },
+            { id: "a1", title: "x", content: "x", created_at: 1 },
+            { id: "a2", title: "x", content: "x", created_at: 1 },
           ],
         });
       }) as unknown as typeof fetch;
 
-      await provider.deleteFile("memory:2026-07-22:owner/repo");
+      await provider.deleteFile("learning:knowledge:project:owner/repo:2026-07-22");
 
       expect(deletedIds).toContain("a1");
       expect(deletedIds).toContain("a2");
@@ -419,11 +415,11 @@ describe("RemoteFileStorageProvider", () => {
       globalThis.fetch = mock((): Response => {
         return mockResponse(200, {
           success: true,
-          data: [{ id: "x", user_id: "u1", kind: "long", text: "有内容", tags: "[]", created_at: 1, archived: 0 }],
+          data: [{ id: "x", title: "有内容", content: "有内容", created_at: 1 }],
         });
       }) as unknown as typeof fetch;
 
-      expect(await provider.exists("memory:2026-07-22:p1")).toBe(true);
+      expect(await provider.exists("learning:knowledge:project:p1:2026-07-22")).toBe(true);
     });
 
     test("无内容返回 false", async () => {
@@ -431,7 +427,7 @@ describe("RemoteFileStorageProvider", () => {
         return mockResponse(200, { success: true, data: [] });
       }) as unknown as typeof fetch;
 
-      expect(await provider.exists("memory:2026-07-22:p1")).toBe(false);
+      expect(await provider.exists("learning:knowledge:project:p1:2026-07-22")).toBe(false);
     });
   });
 
@@ -475,7 +471,7 @@ describe("RemoteFileStorageProvider", () => {
         });
       }) as unknown as typeof fetch;
 
-      await expect(provider.readFile("memory:")).rejects.toThrow(/401/);
+      await expect(provider.readFile("learning:knowledge:::")).rejects.toThrow(/401/);
     });
   });
 });

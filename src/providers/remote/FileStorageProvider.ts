@@ -3,12 +3,14 @@ import { MemoryClient, type RemoteConfig } from "./http-client.js";
 
 /**
  * Remote 模式 FileStorageProvider。
- * 所有文件级操作映射为 Worker REST API 调用。
+ * 按 category 路由到不同 Worker API 端点：
  *
- * path 格式："file_type:date:project_id"
- *   - file_type: memory | identity | user | daily
- *   - date: YYYY-MM-DD
+ * path 格式："category:sub_type:scope:project_id:date"
+ *   - category: instruction | learning | daily
+ *   - sub_type: identity | rule | workflow | preference | episodic | knowledge
+ *   - scope: global | project | user | local
  *   - project_id: owner/repo
+ *   - date: YYYY-MM-DD
  */
 export class RemoteFileStorageProvider implements IFileStorageProvider {
   private client: MemoryClient;
@@ -17,81 +19,155 @@ export class RemoteFileStorageProvider implements IFileStorageProvider {
     this.client = new MemoryClient(config);
   }
 
-  /**
-   * 解析路径为 file_type, date, project_id
-   * 格式: "file_type:date:project_id"
-   */
   private parsePath(path: string): {
-    file_type: string;
-    date: string;
+    category: string;
+    sub_type: string;
+    scope: string;
     project_id: string;
+    date: string;
   } {
     const parts = path.split(":");
     return {
-      file_type: parts[0] || "",
-      date: parts[1] || "",
-      project_id: parts[2] || "",
+      category: parts[0] || "",
+      sub_type: parts[1] || "",
+      scope: parts[2] || "",
+      project_id: parts[3] || "",
+      date: parts[4] || "",
     };
   }
 
-  /** GET /api/memories → 拼接为类文件格式 */
   async readFile(path: string): Promise<string | null> {
-    const { file_type, date, project_id } = this.parsePath(path);
+    const { category, sub_type, project_id, date } = this.parsePath(path);
 
-    const records = await this.client.list({
-      file_type,
-      project_id,
-      date,
-      kind: "long",
-      limit: "100",
-    });
+    switch (category) {
+      case "instruction": {
+        const records = await this.client.listInstructions({
+          type: sub_type || undefined,
+          project_id: project_id || undefined,
+        });
+        if (!records || records.length === 0) return null;
+        return records
+          .map((r) => {
+            const ts = new Date(r.created_at)
+              .toISOString()
+              .replace("T", " ")
+              .slice(0, 19);
+            return `<!-- ${ts} -->\n${r.content}`;
+          })
+          .join("\n\n");
+      }
 
-    if (!records || records.length === 0) return null;
+      case "learning": {
+        const records = await this.client.listLearnings({
+          type: sub_type || undefined,
+          project_id: project_id || undefined,
+        });
+        if (!records || records.length === 0) return null;
+        return records
+          .map((r) => {
+            const ts = new Date(r.created_at)
+              .toISOString()
+              .replace("T", " ")
+              .slice(0, 19);
+            return `<!-- ${ts} -->\n## ${r.title}\n${r.content}`;
+          })
+          .join("\n\n");
+      }
 
-    return records
-      .map((m) => {
-        const ts = new Date(m.created_at)
-          .toISOString()
-          .replace("T", " ")
-          .slice(0, 19);
-        return `<!-- ${ts} -->\n${m.text}`;
-      })
-      .join("\n\n");
+      case "daily": {
+        const records = await this.client.listDailies({
+          project_id: project_id || undefined,
+          date: date || undefined,
+        });
+        if (!records || records.length === 0) return null;
+        return records
+          .map((r) => {
+            const ts = new Date(r.created_at)
+              .toISOString()
+              .replace("T", " ")
+              .slice(0, 19);
+            return `<!-- ${ts} -->\n${r.content}`;
+          })
+          .join("\n\n");
+      }
+
+      default:
+        return null;
+    }
   }
 
-  /** POST /api/memories — 写入记忆（Worker 端自动做 embedding + 索引） */
   async writeFile(path: string, content: string): Promise<void> {
-    const { file_type, date, project_id } = this.parsePath(path);
+    const { category, sub_type, scope, project_id, date } =
+      this.parsePath(path);
 
-    await this.client.write({
-      text: content,
-      kind: "long",
-      file_type: file_type || undefined,
-      project_id: project_id || undefined,
-      date: date || undefined,
-    });
+    switch (category) {
+      case "instruction":
+        await this.client.createInstruction({
+          type: sub_type || "rule",
+          title: sub_type || "指令",
+          content,
+          scope: scope || "global",
+          project_id: project_id || undefined,
+        });
+        break;
+
+      case "learning":
+        await this.client.createLearning({
+          type: (sub_type || "knowledge") as
+            "preference" | "episodic" | "knowledge",
+          title: sub_type || "",
+          content,
+          scope: (scope || "global") as "global" | "project" | "user",
+          project_id: project_id || undefined,
+        });
+        break;
+
+      case "daily":
+        await this.client.createDaily({
+          content,
+          project_id: project_id || undefined,
+          date: date || undefined,
+        });
+        break;
+
+      default:
+        throw new Error(`Unknown category: ${category}`);
+    }
   }
 
-  /** append 在 remote 下等同于 write（D1 逐条存储，无文件追加语义） */
   async appendFile(path: string, content: string): Promise<void> {
     return this.writeFile(path, content);
   }
 
-  /** 删除指定 file_type+project_id 下的所有记录 */
   async deleteFile(path: string): Promise<void> {
-    const { file_type, date, project_id } = this.parsePath(path);
+    const { category } = this.parsePath(path);
 
-    // 获取该 file_type+project_id+date 的所有记录 ID
-    const records = await this.client.list({
-      file_type,
-      project_id,
-      date,
-      kind: "long",
-      limit: "100",
-    });
+    const records = await this.readFile(path);
+    if (!records) return;
 
-    for (const record of records) {
-      await this.client.delete(record.id);
+    // Read back and delete individual records
+    switch (category) {
+      case "instruction": {
+        const instructions = await this.client.listInstructions({});
+        for (const r of instructions) {
+          await this.client.deleteInstruction(r.id);
+        }
+        break;
+      }
+      case "learning": {
+        const learnings = await this.client.listLearnings({});
+        for (const r of learnings) {
+          await this.client.deleteLearning(r.id);
+        }
+        break;
+      }
+      case "daily": {
+        const dailies = await this.client.listDailies({});
+        for (const r of dailies) {
+          await this.client.deleteDaily(r.id);
+        }
+        break;
+      }
     }
   }
 
@@ -100,16 +176,10 @@ export class RemoteFileStorageProvider implements IFileStorageProvider {
     return content !== null;
   }
 
-  /** remote 下列文件功能由 Worker API 的 list 端点提供，此处返回空 */
   async listFiles(_pattern: string): Promise<string[]> {
     return [];
   }
 
-  /**
-   * 🆕 远程搜索方法（突破 IFileStorageProvider 接口）
-   * 供 FileSearcher 在 remote 模式下直接调用，
-   * 跳过本地 embedding 步骤，直接将 query 文本发给 Worker。
-   */
   async search(
     query: string,
     topK: number,

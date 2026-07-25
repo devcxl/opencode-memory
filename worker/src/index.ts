@@ -10,6 +10,9 @@ import { answerQuestion } from './search/hybrid'
 import { runAIWithTimeout } from './utils/ai'
 import { withRetry } from './utils/retry'
 import { createMemory, listMemories, searchMemories, promoteMemory, deleteMemory } from './services/memory-service'
+import { createInstruction, listInstructions, getInstruction, deleteInstruction } from './services/instruction-service'
+import { createLearning, listLearnings, getLearning, deleteLearning } from './services/learning-service'
+import { createDaily, listDailies, getDaily, deleteDaily } from './services/daily-service'
 import type { MiddlewareHandler } from 'hono'
 import type { Env, Variables } from './types'
 import { DEFAULT_LIMIT, MAX_LIMIT, CRON_SCHEDULE } from './types'
@@ -297,6 +300,161 @@ app.delete('/api/memories/:id', async (c) => {
   return c.json({ success: true })
 })
 
+// ── 结构化记忆 API ──
+
+// Zod schemas for new endpoints
+const instructionSchema = z.object({
+  type: z.enum(['identity', 'rule', 'workflow']),
+  title: z.string().min(1).max(500),
+  content: z.string().min(1).max(10000),
+  scope: z.enum(['global', 'project', 'user', 'local']).optional(),
+  project_id: z.string().max(200).optional(),
+  path_pattern: z.string().max(500).optional(),
+  priority: z.number().int().min(0).max(100).optional(),
+  tags: z.array(z.string()).optional(),
+})
+
+const learningSchema = z.object({
+  type: z.enum(['preference', 'episodic', 'knowledge']),
+  title: z.string().min(1).max(500),
+  content: z.string().min(1).max(10000),
+  scope: z.enum(['global', 'project', 'user']).optional(),
+  project_id: z.string().max(200).optional(),
+  source: z.enum(['manual', 'extracted', 'imported']).optional(),
+  source_ids: z.array(z.string()).optional(),
+  confidence: z.number().min(0).max(1).optional(),
+  tags: z.array(z.string()).optional(),
+})
+
+const dailySchema = z.object({
+  content: z.string().min(1).max(10000),
+  project_id: z.string().max(200).optional(),
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  tags: z.array(z.string()).optional(),
+})
+
+// Instructions
+app.post('/api/instructions', async (c) => {
+  const userId = c.get('userId') as string
+  const body = await c.req.json()
+  const validation = instructionSchema.safeParse(body)
+  if (!validation.success) {
+    throw new HTTPException(400, { message: validation.error.issues.map(i => i.message).join(', ') })
+  }
+  const result = await createInstruction(c.env, userId, validation.data)
+  return c.json({ success: true, data: result })
+})
+
+app.get('/api/instructions', async (c) => {
+  const userId = c.get('userId') as string
+  const type = c.req.query('type') as string | undefined
+  const scope = c.req.query('scope') as string | undefined
+  const project_id = c.req.query('project_id') || ''
+  const limit = Math.min(parseInt(c.req.query('limit') || String(DEFAULT_LIMIT)), MAX_LIMIT)
+  const offset = parseInt(c.req.query('offset') || '0') || 0
+
+  const results = await listInstructions(c.env, userId, {
+    type: type as 'identity' | 'rule' | 'workflow' | undefined,
+    scope: scope as 'global' | 'project' | 'user' | 'local' | undefined,
+    project_id,
+    limit,
+    offset,
+  })
+  return c.json({ success: true, data: results })
+})
+
+app.get('/api/instructions/:id', async (c) => {
+  const userId = c.get('userId') as string
+  const id = c.req.param('id')
+  const result = await getInstruction(c.env, userId, id)
+  if (!result) throw new HTTPException(404, { message: 'Not found' })
+  return c.json({ success: true, data: result })
+})
+
+app.delete('/api/instructions/:id', async (c) => {
+  const userId = c.get('userId') as string
+  const id = c.req.param('id')
+  await deleteInstruction(c.env, userId, id)
+  return c.json({ success: true })
+})
+
+// Learnings
+app.post('/api/learnings', async (c) => {
+  const userId = c.get('userId') as string
+  const body = await c.req.json()
+  const validation = learningSchema.safeParse(body)
+  if (!validation.success) {
+    throw new HTTPException(400, { message: validation.error.issues.map(i => i.message).join(', ') })
+  }
+  const result = await createLearning(c.env, userId, validation.data)
+  return c.json({ success: true, data: result })
+})
+
+app.get('/api/learnings', async (c) => {
+  const userId = c.get('userId') as string
+  const type = c.req.query('type') as string | undefined
+  const source = c.req.query('source') as string | undefined
+  const scope = c.req.query('scope') as string | undefined
+  const project_id = c.req.query('project_id') || ''
+  const limit = Math.min(parseInt(c.req.query('limit') || String(DEFAULT_LIMIT)), MAX_LIMIT)
+  const offset = parseInt(c.req.query('offset') || '0') || 0
+
+  const results = await listLearnings(c.env, userId, {
+    type: type as 'preference' | 'episodic' | 'knowledge' | undefined,
+    source: source as 'manual' | 'extracted' | 'imported' | undefined,
+    scope: scope as 'global' | 'project' | 'user' | undefined,
+    project_id,
+    limit,
+    offset,
+  })
+  return c.json({ success: true, data: results })
+})
+
+app.get('/api/learnings/:id', async (c) => {
+  const userId = c.get('userId') as string
+  const id = c.req.param('id')
+  const result = await getLearning(c.env, userId, id)
+  if (!result) throw new HTTPException(404, { message: 'Not found' })
+  return c.json({ success: true, data: result })
+})
+
+app.delete('/api/learnings/:id', async (c) => {
+  const userId = c.get('userId') as string
+  const id = c.req.param('id')
+  await deleteLearning(c.env, userId, id)
+  return c.json({ success: true })
+})
+
+// Dailies
+app.post('/api/dailies', async (c) => {
+  const userId = c.get('userId') as string
+  const body = await c.req.json()
+  const validation = dailySchema.safeParse(body)
+  if (!validation.success) {
+    throw new HTTPException(400, { message: validation.error.issues.map(i => i.message).join(', ') })
+  }
+  const result = await createDaily(c.env, userId, validation.data)
+  return c.json({ success: true, data: result })
+})
+
+app.get('/api/dailies', async (c) => {
+  const userId = c.get('userId') as string
+  const project_id = c.req.query('project_id') || ''
+  const date = c.req.query('date') || ''
+  const limit = Math.min(parseInt(c.req.query('limit') || String(DEFAULT_LIMIT)), MAX_LIMIT)
+  const offset = parseInt(c.req.query('offset') || '0') || 0
+
+  const results = await listDailies(c.env, userId, { project_id, date, limit, offset })
+  return c.json({ success: true, data: results })
+})
+
+app.delete('/api/dailies/:id', async (c) => {
+  const userId = c.get('userId') as string
+  const id = c.req.param('id')
+  await deleteDaily(c.env, userId, id)
+  return c.json({ success: true })
+})
+
 app.get('/api/stats', async (c) => {
   const userId = c.get('userId') as string
   const projectId = c.req.query('project_id')
@@ -368,79 +526,57 @@ app.get('/health', (c) => c.text('OK'))
 
 // ── 导出函数（供测试和路由复用）──
 
-/**
- * 构建注入 system prompt 的记忆上下文
- * 按 file_type 分类：MEMORY.md > IDENTITY.md > USER.md
- * @param projectId 为空字符串时查询全局记忆（不按 project 过滤）
- */
 export async function buildContext(env: Env, userId: string, projectId: string): Promise<string> {
   const queries = [
-    // MEMORY.md（全局 + 项目，支持项目过滤）
     env.DB.prepare(
-      `SELECT text, created_at FROM memories
-       WHERE user_id = ? AND file_type = 'memory' AND kind = 'long'
-         AND (project_id = ? OR ? = '')
-         AND archived = 0
-       ORDER BY created_at DESC LIMIT 10`
-    ).bind(userId, projectId, projectId).all<{ text: string; created_at: number }>(),
+      `SELECT title, content, created_at FROM instructions WHERE user_id = ? AND type = 'identity' AND archived = 0 ORDER BY created_at DESC LIMIT 1`
+    ).bind(userId).all<{ title: string; content: string; created_at: number }>(),
 
-    // IDENTITY.md（全局，不按项目过滤）
     env.DB.prepare(
-      `SELECT text, created_at FROM memories
-       WHERE user_id = ? AND file_type = 'identity' AND kind = 'long'
-         AND archived = 0
-       ORDER BY created_at DESC LIMIT 1`
-    ).bind(userId).all<{ text: string; created_at: number }>(),
+      `SELECT title, content, created_at FROM learnings WHERE user_id = ? AND type = 'preference' AND archived = 0 ORDER BY created_at DESC LIMIT 1`
+    ).bind(userId).all<{ title: string; content: string; created_at: number }>(),
 
-    // USER.md（全局，不按项目过滤）
     env.DB.prepare(
-      `SELECT text, created_at FROM memories
-       WHERE user_id = ? AND file_type = 'user' AND kind = 'long'
-         AND archived = 0
-       ORDER BY created_at DESC LIMIT 1`
-    ).bind(userId).all<{ text: string; created_at: number }>(),
+      `SELECT title, content, created_at FROM learnings WHERE user_id = ? AND type = 'knowledge' AND archived = 0 AND (project_id = ? OR ? = '') ORDER BY created_at DESC LIMIT 10`
+    ).bind(userId, projectId, projectId).all<{ title: string; content: string; created_at: number }>(),
   ]
 
-  const [memoryRows, identityRows, userRows] = await Promise.all(queries)
+  const [identityRows, preferenceRows, knowledgeRows] = await Promise.all(queries)
 
-  const fmtSection = (title: string, items: { text: string; created_at: number }[]): string => {
+  const fmt = (title: string, items: { title?: string; content: string; created_at: number }[]): string => {
     if (!items || items.length === 0) return ''
     const content = items.map(r => {
       const date = new Date(r.created_at).toISOString().replace('T', ' ').slice(0, 19)
-      return `<!-- ${date} -->\n${r.text}`
+      return `<!-- ${date} -->\n${r.content}`
     }).join('\n\n')
     return `## ${title}\n\n${content}`
   }
 
   const sections = [
-    fmtSection('MEMORY.md', memoryRows.results || []),
-    fmtSection('IDENTITY.md', identityRows.results || []),
-    fmtSection('USER.md', userRows.results || []),
+    fmt('IDENTITY.md', identityRows.results || []),
+    fmt('USER.md', preferenceRows.results || []),
+    fmt('Project Knowledge', knowledgeRows.results || []),
   ].filter(Boolean)
 
   return sections.join('\n\n---\n\n')
 }
 
-/**
- * 获取记忆统计信息
- * @param projectId 可选，按 project 过滤统计
- */
-export async function getStatsRaw(env: Env, userId: string, projectId?: string): Promise<{ shortCount: number; longCount: number }> {
+export async function getStatsRaw(env: Env, userId: string, projectId?: string): Promise<{
+  instructionCount: number; learningCount: number; dailyCount: number
+}> {
   const projectFilter = projectId ? ' AND project_id = ?' : ''
-  const bindingsBase = projectId ? [userId, projectId] : [userId]
+  const bindings = projectId ? [userId, projectId] : [userId]
 
-  const [shortRow, longRow] = await Promise.all([
-    env.DB.prepare(
-      `SELECT COUNT(*) as count FROM memories WHERE user_id = ? AND kind = 'short' AND archived = 0${projectFilter}`
-    ).bind(...bindingsBase).first<{ count: number } | undefined>(),
-    env.DB.prepare(
-      `SELECT COUNT(*) as count FROM memories WHERE user_id = ? AND kind = 'long' AND archived = 0${projectFilter}`
-    ).bind(...bindingsBase).first<{ count: number } | undefined>(),
+  const [instRow, learnRow, dailyRow] = await Promise.all([
+    env.DB.prepare(`SELECT COUNT(*) as count FROM instructions WHERE user_id = ? AND archived = 0${projectFilter}`).bind(...bindings).first<{ count: number }>(),
+    env.DB.prepare(`SELECT COUNT(*) as count FROM learnings WHERE user_id = ? AND archived = 0${projectFilter}`).bind(...bindings).first<{ count: number }>(),
+    env.DB.prepare(`SELECT COUNT(*) as count FROM dailies WHERE user_id = ? AND archived = 0${projectFilter}`).bind(...bindings).first<{ count: number }>(),
   ])
 
   return {
-    shortCount: shortRow?.count ?? 0,
-    longCount: longRow?.count ?? 0,
+    instructionCount: instRow?.count ?? 0,
+    learningCount: learnRow?.count ?? 0,
+    dailyCount: dailyRow?.count ?? 0,
   }
 }
 

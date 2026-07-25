@@ -1,8 +1,36 @@
 import type { D1Database, VectorizeIndex } from '@cloudflare/workers-types'
-import type { Memory, AskResponse, RagCitation, KeywordSearchResult } from '@cfmem/shared'
+import type {
+  Memory,
+  Instruction,
+  InstructionType,
+  Learning,
+  LearningType,
+  MemoryScope,
+  LearningSource,
+  Daily,
+  Project,
+  ExtractionLog,
+  AskResponse,
+  RagCitation,
+  KeywordSearchResult,
+} from '@cfmem/shared'
 
-// Re-export shared types so consumers can import from '../types'
-export type { Memory, AskResponse, RagCitation, KeywordSearchResult }
+// Re-export shared types
+export type {
+  Memory,
+  Instruction,
+  InstructionType,
+  Learning,
+  LearningType,
+  MemoryScope,
+  LearningSource,
+  Daily,
+  Project,
+  ExtractionLog,
+  AskResponse,
+  RagCitation,
+  KeywordSearchResult,
+}
 
 export const SHORT_TERM_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000
 export const DEFAULT_LIMIT = 50

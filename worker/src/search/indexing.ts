@@ -13,6 +13,7 @@ export interface IndexableMemory {
   project_id?: string
   file_type?: string
   date?: string | null
+  source_table?: string
 }
 
 export interface IndexingDeps {
@@ -44,6 +45,7 @@ export async function upsertMemoryVector(deps: IndexingDeps, memory: IndexableMe
         project_id: memory.project_id || '',
         file_type: memory.file_type || 'memory',
         date: memory.date || '',
+        source_table: memory.source_table || 'memories',
       },
     }]),
     'memory vector upsert'

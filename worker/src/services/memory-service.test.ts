@@ -217,9 +217,9 @@ test('listMemories 不提供过滤字段时不添加额外 WHERE 条件', async 
   assert.ok(bindings.length >= 4, `至少应有 4 个绑定（user_id, kind, limit, offset），实际: ${bindings.length}`)
 })
 
-// ── T9: context 端点重构 ──
+// ── T9: context 端点重构（已迁移到结构化表）──
 
-test('buildContext 按 file_type 分类查询 memory/identity/user', async () => {
+test('buildContext 从 instructions/learnings 表查询', async () => {
   const { db, getQueries } = createMockDB()
   const env = createEnv(db)
 
@@ -228,89 +228,39 @@ test('buildContext 按 file_type 分类查询 memory/identity/user', async () =>
   const allQueries = getQueries()
   const selectQueries = allQueries.filter(q => q.sql.includes('SELECT'))
 
-  // 应有至少 3 个 SELECT（memory, identity, user）
+  // 应有至少 3 个 SELECT（identity, preference, knowledge）
   assert.ok(selectQueries.length >= 3, `应有 >=3 个 SELECT 查询，实际: ${selectQueries.length}`)
 
-  // memory 查询应包含 file_type='memory'
-  const memoryQuery = selectQueries.find(q => q.sql.includes("file_type = 'memory'"))
-  assert.ok(memoryQuery, `应有 memory 查询 (file_type='memory')，实际查询: ${selectQueries.map(q => q.sql).join('\n')}`)
+  // identity 查询应来自 instructions 表
+  const identityQuery = selectQueries.find(q => q.sql.includes('FROM instructions') && q.sql.includes("type = 'identity'"))
+  assert.ok(identityQuery, `应有 identity 查询 (instructions/type='identity')，实际: ${selectQueries.map(q => q.sql).join('\n')}`)
 
-  // identity 查询应包含 file_type='identity'
-  const identityQuery = selectQueries.find(q => q.sql.includes("file_type = 'identity'"))
-  assert.ok(identityQuery, `应有 identity 查询 (file_type='identity')`)
+  // preference 查询应来自 learnings 表
+  const preferenceQuery = selectQueries.find(q => q.sql.includes('FROM learnings') && q.sql.includes("type = 'preference'"))
+  assert.ok(preferenceQuery, `应有 preference 查询 (learnings/type='preference')`)
 
-  // user 查询应包含 file_type='user'
-  const userQuery = selectQueries.find(q => q.sql.includes("file_type = 'user'"))
-  assert.ok(userQuery, `应有 user 查询 (file_type='user')`)
+  // knowledge 查询应来自 learnings 表 + project_id 过滤
+  const knowledgeQuery = selectQueries.find(q => q.sql.includes('FROM learnings') && q.sql.includes("type = 'knowledge'") && q.sql.includes('project_id'))
+  assert.ok(knowledgeQuery, `应有 knowledge 查询 (learnings/type='knowledge' + project_id)`)
 })
 
-test('buildContext memory 查询支持 project_id 过滤', async () => {
-  const { db, getQueries } = createMockDB()
-  const env = createEnv(db)
-
-  await buildContext(env, 'user-1', 'owner/repo')
-
-  const allQueries = getQueries()
-  const memoryQuery = allQueries.find(q =>
-    q.sql.includes("file_type = 'memory'") && q.sql.includes('project_id')
-  )
-
-  assert.ok(memoryQuery, 'memory 查询应包含 project_id 过滤')
-
-  // 验证 SQL 使用 (project_id = ? OR ? = '') 模式
-  assert.ok(
-    memoryQuery!.sql.includes('project_id = ?'),
-    `SQL 应包含 project_id = ?，实际: ${memoryQuery?.sql}`
-  )
-
-  const bindings = memoryQuery!.bindings as unknown[]
-  const projectIdIdx = bindings.findIndex(b => b === 'owner/repo')
-  assert.ok(projectIdIdx >= 0, `bindings 应包含 project_id='owner/repo'，实际: ${JSON.stringify(bindings)}`)
-})
-
-test('buildContext identity 和 user 查询不含 project_id', async () => {
-  const { db, getQueries } = createMockDB()
-  const env = createEnv(db)
-
-  await buildContext(env, 'user-1', 'owner/repo')
-
-  const allQueries = getQueries()
-  const identityQuery = allQueries.find(q => q.sql.includes("file_type = 'identity'"))
-  const userQuery = allQueries.find(q => q.sql.includes("file_type = 'user'"))
-
-  assert.ok(identityQuery, '应有 identity 查询')
-  assert.ok(userQuery, '应有 user 查询')
-
-  // identity 和 user 查询不应包含 project_id（全局概念）
-  assert.ok(
-    !identityQuery!.sql.includes('project_id'),
-    `identity 查询不应包含 project_id，实际: ${identityQuery?.sql}`
-  )
-  assert.ok(
-    !userQuery!.sql.includes('project_id'),
-    `user 查询不应包含 project_id，实际: ${userQuery?.sql}`
-  )
-})
-
-test('buildContext 输出格式匹配注入模板', async () => {
+test('buildContext 输出格式匹配新模板', async () => {
   const { db, setAllResults } = createMockDB()
 
-  // 预设 memory 结果
   setAllResults([
     {
       results: [
-        { text: '全局记忆内容', created_at: 1750000000000 },
-        { text: '项目记忆内容', created_at: 1750000100000 },
+        { content: 'AI 身份：OpenCode', created_at: 1740000000000 },
       ],
     },
     {
       results: [
-        { text: 'AI 身份：OpenCode', created_at: 1740000000000 },
+        { content: '用户偏好：简洁优先', created_at: 1740000000000 },
       ],
     },
     {
       results: [
-        { text: '用户：Felix，全栈工程师', created_at: 1740000000000 },
+        { content: '项目架构：monorepo', created_at: 1750000000000 },
       ],
     },
   ])
@@ -318,60 +268,56 @@ test('buildContext 输出格式匹配注入模板', async () => {
   const env = createEnv(db)
   const context = await buildContext(env, 'user-1', 'test/proj')
 
-  // 验证标题格式
-  assert.ok(context.includes('## MEMORY.md'), `context 应包含 '## MEMORY.md'，实际: ${context.slice(0, 200)}`)
-  assert.ok(context.includes('## IDENTITY.md'), `context 应包含 '## IDENTITY.md'，实际: ${context.slice(0, 200)}`)
-  assert.ok(context.includes('## USER.md'), `context 应包含 '## USER.md'，实际: ${context.slice(0, 200)}`)
-
-  // 验证分隔符
-  assert.ok(context.includes('\n\n---\n\n'), `context 应包含分隔符 '\\n\\n---\\n\\n'，实际: ${context.slice(0, 200)}`)
-
-  // 验证时间戳格式 <!-- YYYY-MM-DD HH:MM:SS -->
-  assert.ok(context.includes('<!-- '), `context 应包含时间戳注释，实际: ${context.slice(0, 200)}`)
+  assert.ok(context.includes('## IDENTITY.md'), `context 应包含 '## IDENTITY.md'`)
+  assert.ok(context.includes('## USER.md'), `context 应包含 '## USER.md'`)
+  assert.ok(context.includes('## Project Knowledge'), `context 应包含 '## Project Knowledge'`)
+  assert.ok(context.includes('\n\n---\n\n'), `context 应包含分隔符`)
+  assert.ok(context.includes('<!-- '), `context 应包含时间戳注释`)
 })
 
 test('buildContext 无数据时不生成空节段', async () => {
   const { db, setAllResults } = createMockDB()
 
-  // 预设：identity 有数据，memory/user 为空
   setAllResults([
-    { results: [] }, // memory 空
     {
       results: [
-        { text: 'AI 身份：OpenCode', created_at: 1740000000000 },
+        { content: 'AI 身份：OpenCode', created_at: 1740000000000 },
       ],
     },
-    { results: [] }, // user 空
+    { results: [] }, // preference 空
+    { results: [] }, // knowledge 空
   ])
 
   const env = createEnv(db)
   const context = await buildContext(env, 'user-1', '')
 
-  // identity 应有标题
   assert.ok(context.includes('## IDENTITY.md'), 'context 应包含 identity 节段')
-
-  // memory 和 user 不应有标题
-  assert.ok(!context.includes('## MEMORY.md'), 'memory 为空时不应有 MEMORY 节段')
-  assert.ok(!context.includes('## USER.md'), 'user 为空时不应有 USER 节段')
+  assert.ok(!context.includes('## USER.md'), 'preference 为空时不应有 USER 节段')
+  assert.ok(!context.includes('## Project Knowledge'), 'knowledge 为空时不应有 Project Knowledge 节段')
 })
 
-// ── T9: stats 端点扩展 ──
+// ── stats 端点（已迁移到多表）──
 
-test('getStatsRaw 默认无 project_id 过滤', async () => {
+test('getStatsRaw 从三表聚合统计', async () => {
   const { db, getQueries } = createMockDB()
   const env = createEnv(db)
 
-  await getStatsRaw(env, 'user-1')
+  const stats = await getStatsRaw(env, 'user-1')
+
+  assert.ok('instructionCount' in stats, 'stats 应包含 instructionCount')
+  assert.ok('learningCount' in stats, 'stats 应包含 learningCount')
+  assert.ok('dailyCount' in stats, 'stats 应包含 dailyCount')
 
   const allQueries = getQueries()
-  const selectQueries = allQueries.filter(q => q.sql.includes('SELECT COUNT'))
+  const countQueries = allQueries.filter(q => q.sql.includes('SELECT COUNT'))
 
-  assert.ok(selectQueries.length >= 2, `应有 >=2 个统计查询，实际: ${selectQueries.length}`)
-
-  // stats 查询不应包含 project_id（默认无过滤）
-  for (const q of selectQueries) {
-    assert.ok(!q.sql.includes('project_id'), `stats 查询不应包含 project_id（无参数时），实际: ${q.sql}`)
-  }
+  // 应有 3 个统计查询（instructions, learnings, dailies）
+  const hasInstructions = countQueries.some(q => q.sql.includes('FROM instructions'))
+  const hasLearnings = countQueries.some(q => q.sql.includes('FROM learnings'))
+  const hasDailies = countQueries.some(q => q.sql.includes('FROM dailies'))
+  assert.ok(hasInstructions, '应有 instructions 统计查询')
+  assert.ok(hasLearnings, '应有 learnings 统计查询')
+  assert.ok(hasDailies, '应有 dailies 统计查询')
 })
 
 test('getStatsRaw 提供 project_id 时添加过滤', async () => {
@@ -381,12 +327,11 @@ test('getStatsRaw 提供 project_id 时添加过滤', async () => {
   await getStatsRaw(env, 'user-1', 'owner/repo')
 
   const allQueries = getQueries()
-  const selectQueries = allQueries.filter(q => q.sql.includes('SELECT COUNT'))
+  const countQueries = allQueries.filter(q => q.sql.includes('SELECT COUNT'))
 
-  assert.ok(selectQueries.length >= 2, `应有 >=2 个统计查询，实际: ${selectQueries.length}`)
+  assert.ok(countQueries.length >= 3, `应有 >=3 个统计查询`)
 
-  // 所有统计查询应包含 project_id 过滤
-  for (const q of selectQueries) {
+  for (const q of countQueries) {
     assert.ok(q.sql.includes('project_id'), `stats 查询应包含 project_id，实际: ${q.sql}`)
   }
 })

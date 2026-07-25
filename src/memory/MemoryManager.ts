@@ -159,46 +159,109 @@ export class MemoryManager {
    * @param target 目标类型：memory | identity | user | daily
    * @param date daily 类型时的日期
    * @param project 项目级 memory 时的项目 ID
+   * @param category 新分类（instruction | learning | daily），优于 target 推导
+   * @param subType 新子类型（identity | rule | workflow | preference | episodic | knowledge）
+   * @param scope 作用域（global | project | user | local）
    */
   getPathForTarget(
     target: string,
     date?: string,
     project?: string | null,
-  ): { filePath: string; displayName: string } {
-    // remote 模式：返回 "file_type:date:project_id" 格式，供 Worker API 解析
+    category?: string,
+    subType?: string,
+    scope?: string,
+  ): {
+    filePath: string;
+    displayName: string;
+    category: string;
+    subType: string;
+  } {
+    // 🆕 target → category/subType 向后兼容映射表
+    const TARGET_MAP: Record<string, { category: string; sub_type: string }> = {
+      memory: { category: "learning", sub_type: "knowledge" },
+      identity: { category: "instruction", sub_type: "identity" },
+      user: { category: "learning", sub_type: "preference" },
+      daily: { category: "daily", sub_type: "" },
+    };
+
+    const resolved =
+      category && subType !== undefined
+        ? { category, sub_type: subType }
+        : (TARGET_MAP[target] ?? {
+            category: "learning",
+            sub_type: "knowledge",
+          });
+
+    const effectiveScope = scope ?? (project ? "project" : "global");
+    const effectiveProject = project ?? "";
+
     if (this.mode === "remote") {
-      const fileType = target;
       const effectiveDate =
         target === "daily" ? (normalizeDailyDate(date) ?? this.todayStr()) : "";
-      const effectiveProject = project ?? "";
-      const filePath = `${fileType}:${effectiveDate}:${effectiveProject}`;
-      return { filePath, displayName: filePath };
+      const filePath = [
+        resolved.category,
+        resolved.sub_type,
+        effectiveScope,
+        effectiveProject,
+        effectiveDate,
+      ].join(":");
+      return {
+        filePath,
+        displayName: filePath,
+        category: resolved.category,
+        subType: resolved.sub_type,
+      };
     }
 
-    // local 模式：保持现有逻辑不变
+    // local 模式
+    const { category: cat, sub_type: st } = resolved;
     switch (target) {
       case "memory": {
         if (project) {
           const filePath = this.getProjectMemoryPath(project);
-          return { filePath, displayName: `projects/${project}/MEMORY.md` };
+          return {
+            filePath,
+            displayName: `projects/${project}/MEMORY.md`,
+            category: cat,
+            subType: st,
+          };
         }
-        return { filePath: this.getMemoryPath(), displayName: "MEMORY.md" };
+        return {
+          filePath: this.getMemoryPath(),
+          displayName: "MEMORY.md",
+          category: cat,
+          subType: st,
+        };
       }
       case "identity":
-        return { filePath: this.getIdentityPath(), displayName: "IDENTITY.md" };
+        return {
+          filePath: this.getIdentityPath(),
+          displayName: "IDENTITY.md",
+          category: cat,
+          subType: st,
+        };
       case "user":
-        return { filePath: this.getUserPath(), displayName: "USER.md" };
+        return {
+          filePath: this.getUserPath(),
+          displayName: "USER.md",
+          category: cat,
+          subType: st,
+        };
       case "daily": {
         const targetDate = normalizeDailyDate(date) ?? this.todayStr();
         if (project) {
           return {
             filePath: this.paths.projectDailyPath(project, targetDate),
             displayName: `projects/${project}/daily/${targetDate}.md`,
+            category: cat,
+            subType: st,
           };
         }
         return {
           filePath: this.getDailyPath(targetDate),
           displayName: `daily/${targetDate}.md`,
+          category: cat,
+          subType: st,
         };
       }
       default:

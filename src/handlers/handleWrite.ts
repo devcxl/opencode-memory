@@ -18,10 +18,26 @@ export async function handleWrite(
     mode?: string;
     date?: string;
     project?: string;
+    category?: string;
+    sub_type?: string;
+    scope?: string;
+    title?: string;
+    path_pattern?: string;
   },
   memoryManager: MemoryManager,
 ): Promise<string> {
-  const { target, content, mode, date, project } = params;
+  const {
+    target,
+    content,
+    mode,
+    date,
+    project,
+    category,
+    sub_type,
+    scope,
+    title,
+    path_pattern,
+  } = params;
 
   if (!content) {
     return "Error: content is required for write action.";
@@ -43,14 +59,19 @@ export async function handleWrite(
       target,
       date,
       project || undefined,
+      category,
+      sub_type,
+      scope,
     );
 
     const timestamp = memoryManager.getLocalTimestamp();
 
+    const effectiveContent = title ? `## ${title}\n${content}` : content;
+
     if (mode === "overwrite") {
-      await memoryManager.writeFile(filePath, content);
+      await memoryManager.writeFile(filePath, effectiveContent);
     } else {
-      await memoryManager.appendFile(filePath, content);
+      await memoryManager.appendFile(filePath, effectiveContent);
     }
 
     const scopeTag = project
