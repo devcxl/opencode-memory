@@ -13,6 +13,7 @@ import { createMemory, listMemories, searchMemories, promoteMemory, deleteMemory
 import { createInstruction, listInstructions, getInstruction, deleteInstruction } from './services/instruction-service'
 import { createLearning, listLearnings, getLearning, deleteLearning } from './services/learning-service'
 import { createDaily, listDailies, getDaily, deleteDaily } from './services/daily-service'
+import { triggerExtraction, getExtractionStatus } from './services/extraction-service'
 import type { MiddlewareHandler } from 'hono'
 import type { Env, Variables } from './types'
 import { DEFAULT_LIMIT, MAX_LIMIT, CRON_SCHEDULE } from './types'
@@ -453,6 +454,23 @@ app.delete('/api/dailies/:id', async (c) => {
   const id = c.req.param('id')
   await deleteDaily(c.env, userId, id)
   return c.json({ success: true })
+})
+
+// ── 提取端点 ──
+
+app.post('/api/extract', async (c) => {
+  const userId = c.get('userId') as string
+  const body = await c.req.json().catch(() => ({}))
+  const beforeDate = body.date || new Date().toISOString().slice(0, 10)
+
+  const result = await triggerExtraction(c.env, userId, beforeDate)
+  return c.json({ success: true, data: result })
+})
+
+app.get('/api/extract/status', async (c) => {
+  const userId = c.get('userId') as string
+  const result = await getExtractionStatus(c.env, userId)
+  return c.json({ success: true, data: result })
 })
 
 app.get('/api/stats', async (c) => {
