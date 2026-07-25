@@ -1,0 +1,137 @@
+tasks:
+  - id: T1
+    title: "D1 Migration 0007 — 结构化多表 Schema"
+    phase: P0
+    batch: 1
+    dependencies: []
+    tags: [worker, d1, migration]
+    estimated_hours: 1.5
+    file: T1-migration-0007.md
+
+  - id: T2
+    title: "跨表搜索引擎"
+    phase: P0
+    batch: 2
+    dependencies: [T1]
+    tags: [worker, search, vectorize, fts]
+    estimated_hours: 2
+    file: T2-cross-table-search.md
+
+  - id: T3
+    title: "Worker API — /api/instructions CRUD"
+    phase: P1
+    batch: 2
+    dependencies: [T1]
+    tags: [worker, api, crud]
+    estimated_hours: 1.5
+    file: T3-api-instructions.md
+
+  - id: T4
+    title: "Worker API — /api/learnings CRUD"
+    phase: P1
+    batch: 2
+    dependencies: [T1]
+    tags: [worker, api, crud]
+    estimated_hours: 1.5
+    file: T4-api-learnings.md
+
+  - id: T5
+    title: "Worker API — /api/dailies + /api/extract"
+    phase: P1
+    batch: 2
+    dependencies: [T1]
+    tags: [worker, api, crud, extract]
+    estimated_hours: 2
+    file: T5-api-dailies-extract.md
+
+  - id: T6
+    title: "Worker API — /api/context 按需加载改造"
+    phase: P1
+    batch: 3
+    dependencies: [T2]
+    tags: [worker, api, context]
+    estimated_hours: 1.5
+    file: T6-api-context.md
+
+  - id: T7
+    title: "Worker API — /api/stats 多表聚合"
+    phase: P1
+    batch: 3
+    dependencies: [T3, T4]
+    tags: [worker, api, stats]
+    estimated_hours: 1
+    file: T7-api-stats.md
+
+  - id: T8
+    title: "插件 Provider — category 路由到不同 API 端点"
+    phase: P2
+    batch: 3
+    dependencies: [T3, T4, T5]
+    tags: [plugin, provider, http-client]
+    estimated_hours: 2
+    file: T8-provider-router.md
+
+  - id: T9
+    title: "插件 MemoryManager — category/sub_type 改造 + 向后兼容映射"
+    phase: P2
+    batch: 4
+    dependencies: [T8]
+    tags: [plugin, memory-manager, compat]
+    estimated_hours: 2.5
+    file: T9-memory-manager.md
+
+  - id: T10
+    title: "memory 工具 — 新增 category/sub_type/path_pattern 参数"
+    phase: P2
+    batch: 5
+    dependencies: [T9]
+    tags: [plugin, tool, schema]
+    estimated_hours: 1.5
+    file: T10-memory-tool.md
+
+  - id: T11
+    title: "上下文注入 — 按需加载 + path_pattern 匹配"
+    phase: P3
+    batch: 6
+    dependencies: [T9, T10]
+    tags: [plugin, context, injection]
+    estimated_hours: 2
+    file: T11-context-injection.md
+
+  - id: T12
+    title: "LLM 提取 Pipeline — daily → learning"
+    phase: P4
+    batch: 4
+    dependencies: [T5]
+    tags: [worker, extraction, llm]
+    estimated_hours: 3
+    file: T12-extraction-pipeline.md
+
+  - id: T13
+    title: "提取管道测试"
+    phase: P4
+    batch: 5
+    dependencies: [T12]
+    tags: [test, extraction]
+    estimated_hours: 1.5
+    file: T13-extraction-tests.md
+
+  - id: T14
+    title: "旧数据迁移脚本"
+    phase: P5
+    batch: 7
+    dependencies: [T8, T9]
+    tags: [migration, data]
+    estimated_hours: 1.5
+    file: T14-data-migration.md
+
+  - id: T15
+    title: "E2E 测试 + 清理"
+    phase: P5
+    batch: 8
+    dependencies: [T11, T12, T14]
+    tags: [test, e2e, cleanup]
+    estimated_hours: 2
+    file: T15-e2e-cleanup.md
+
+total_estimated_hours: 26.5
