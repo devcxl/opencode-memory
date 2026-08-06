@@ -87,6 +87,22 @@ MEMORY.md、IDENTITY.md 和 USER.md 会在会话开始时自动注入到 system 
 
 每日日志需通过 `memory` 工具访问。
 
+## 仓库结构
+
+本仓库是 pnpm monorepo。发布到 npm 的插件位于 `apps/plugin`，Cloudflare Workers 后端与 Web 管理后台各为独立子包。
+
+```
+opencode-memory/
+├── apps/
+│   ├── api/            # @devcxl/opencode-memory-api     Cloudflare Worker 后端
+│   ├── plugin/         # @devcxl/opencode-memory         发布到 npm 的 OpenCode 插件（即本 README）
+│   └── web/            # @devcxl/opencode-memory-web     Web 管理后台
+├── packages/
+│   └── shared/         # @devcxl/opencode-memory-shared  各包共享类型
+├── scripts/            # 运维脚本
+└── docs/               # 架构文档、ADR 与任务规格
+```
+
 ## 许可证
 
 MIT

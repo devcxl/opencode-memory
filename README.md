@@ -87,6 +87,22 @@ MEMORY.md, IDENTITY.md, and USER.md are automatically injected into the system p
 
 Daily logs must be accessed via the `memory` tool.
 
+## Repository Structure
+
+This repository is a pnpm monorepo. The npm-published plugin lives in `apps/plugin`; the Cloudflare Workers backend and the web dashboard are separate packages.
+
+```
+opencode-memory/
+├── apps/
+│   ├── api/            # @devcxl/opencode-memory-api     Cloudflare Worker backend
+│   ├── plugin/         # @devcxl/opencode-memory         The npm-published OpenCode plugin (this README)
+│   └── web/            # @devcxl/opencode-memory-web     Web dashboard
+├── packages/
+│   └── shared/         # @devcxl/opencode-memory-shared  Shared types between packages
+├── scripts/            # Operations scripts
+└── docs/               # Architecture docs, ADR and task specs
+```
+
 ## License
 
 MIT
