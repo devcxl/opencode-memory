@@ -2,7 +2,7 @@
  * E2E 测试：远程模式直连本地 Worker
  *
  * 运行前需要：
- *   1. 启动 Worker:  cd worker && JWT_SECRET=test-secret npx wrangler dev --remote
+ *   1. 启动 Worker:  cd apps/api && JWT_SECRET=test-secret npx wrangler dev --remote
  *   2. 生成 JWT:      JWT_SECRET=test-secret npx tsx scripts/generate-jwt.ts
  *   3. 设置环境变量:   export CFMEM_E2E_API_KEY=<JWT>
  *

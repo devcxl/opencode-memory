@@ -5,7 +5,7 @@
  * 模拟 D1, Vectorize, Workers AI 绑定，验证完整请求/响应流程。
  */
 import { describe, test, expect, beforeAll, mock } from "bun:test";
-import type { Memory, KeywordSearchResult } from "@cfmem/shared";
+import type { Memory, KeywordSearchResult } from "@devcxl/opencode-memory-shared";
 
 // ─── Mock D1 Database ──────────────────────────────
 const mockDb = {
@@ -73,7 +73,7 @@ describe("E2E: Worker API (app.request test)", () => {
 
   beforeAll(async () => {
     // 动态导入 Worker（需要 workerd polyfills 已加载）
-    const mod = await import("../worker/src/index");
+    const mod = await import("../../api/src/index");
     app = mod.default as any;
     token = await generateJWT();
   });

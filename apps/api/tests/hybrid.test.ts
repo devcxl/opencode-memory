@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { answerQuestion } from './hybrid'
-import type { Env, Memory } from '../types'
+import { answerQuestion } from '../src/search/hybrid'
+import type { Env, Memory } from '../src/types'
 
 const baseMemory: Memory = {
   id: 'memory-1',
@@ -14,6 +14,8 @@ const baseMemory: Memory = {
   source: undefined,
   expires_at: null,
   consolidated_at: null,
+  project_id: '',
+  file_type: 'memory',
 }
 
 function createEnv(memory: Memory = baseMemory): Env {

@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { triggerExtraction, getExtractionStatus } from './extraction-service'
-import type { Env, Daily, ExtractionLog } from '../types'
+import { triggerExtraction, getExtractionStatus } from '../src/services/extraction-service'
+import type { Env, Daily, ExtractionLog } from '../src/types'
 
 function createMockDB() {
   type CapturedQuery = { sql: string; bindings: unknown[] }
@@ -41,7 +41,7 @@ function createMockDB() {
 function createEnv(db: ReturnType<typeof createMockDB>['db']): Env {
   return {
     DB: db as Env['DB'],
-    VEC: { upsert: async () => {}, deleteByIds: async () => {}, query: async () => ({ matches: [] }) } as Env['VEC'],
+    VEC: { upsert: async () => {}, deleteByIds: async () => {}, query: async () => ({ matches: [] }) } as unknown as Env['VEC'],
     AI: {
       run: async () => ({ response: JSON.stringify([{ id: 'd1', action: 'extract', type: 'episodic', title: 'Bug修复', content: '修复了JSON解析问题', confidence: 0.8 }]) }),
     } as Env['AI'],

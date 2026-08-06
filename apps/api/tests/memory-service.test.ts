@@ -1,8 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createMemory, listMemories } from './memory-service'
-import { buildContext, getStatsRaw } from '../index'
-import type { Env } from '../types'
+import { createMemory, listMemories } from '../src/services/memory-service'
+import { buildContext, getStatsRaw } from '../src/index'
+import type { Env } from '../src/types'
 
 /**
  * 创建 mock D1 数据库 — 捕获 SQL 和 bindings 以验证查询结构
@@ -73,7 +73,7 @@ function createEnv(db: ReturnType<typeof createMockDB>['db']): Env {
       upsert: async () => {},
       deleteByIds: async () => {},
       query: async () => ({ matches: [] }),
-    } as Env['VEC'],
+    } as unknown as Env['VEC'],
     AI: {
       run: async () => ({ data: [[0.1]] }),
     } as Env['AI'],

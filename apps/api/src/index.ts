@@ -52,24 +52,22 @@ const askSchema = z.object({
 
 const app = new Hono<{ Bindings: Env; Variables: Variables }>()
 
-app.use('*', cors((c) => {
-  // Get allowed origins from environment variable or use defaults
-  const allowedOrigins = c.env.ALLOWED_ORIGINS
-    ? c.env.ALLOWED_ORIGINS.split(',').map(o => o.trim())
-    : ['http://localhost:3000', 'http://127.0.0.1:3000']
+app.use('*', cors({
+  // 动态校验请求来源，仅放行 allowlist 中的 Origin
+  origin: (_origin, c) => {
+    const allowedOrigins = c.env.ALLOWED_ORIGINS
+      ? c.env.ALLOWED_ORIGINS.split(',').map((o: string) => o.trim())
+      : ['http://localhost:3000', 'http://127.0.0.1:3000']
 
-  // Get the origin from the request header
-  const requestOrigin = c.req.header('Origin') || c.req.header('origin')
+    // 取请求头 Origin，判断是否在 allowlist 内
+    const requestOrigin = c.req.header('Origin') || c.req.header('origin')
+    const isAllowed = allowedOrigins.includes(requestOrigin || '')
 
-  // Check if the origin is allowed
-  const isAllowed = allowedOrigins.includes(requestOrigin || '')
-
-  return {
-    origin: isAllowed ? requestOrigin : (allowedOrigins[0] || '*'),
-    allowHeaders: ['Authorization', 'Content-Type'],
-    allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    credentials: true,
-  }
+    return isAllowed ? requestOrigin : (allowedOrigins[0] || '*')
+  },
+  allowHeaders: ['Authorization', 'Content-Type'],
+  allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  credentials: true,
 }))
 
 // Structured logging middleware

@@ -13,7 +13,7 @@ import type {
   AskResponse,
   RagCitation,
   KeywordSearchResult,
-} from '@cfmem/shared'
+} from '@devcxl/opencode-memory-shared'
 
 // Re-export shared types
 export type {

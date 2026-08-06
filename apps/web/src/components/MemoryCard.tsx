@@ -2,7 +2,7 @@ import { Trash2, TrendingUp, Calendar, Tag } from 'lucide-react'
 import type { Memory } from '../types'
 
 interface MemoryCardProps {
-  memory: Memory
+  memory: Memory & { snippet?: string }
   onPromote?: (id: string) => void
   onDelete?: (id: string) => void
 }
