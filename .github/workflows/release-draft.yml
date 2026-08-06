@@ -25,7 +25,7 @@ jobs:
       - name: Read package version
         id: package
         run: |
-          VERSION=$(bun -e "console.log(JSON.parse(require('node:fs').readFileSync('package.json', 'utf8')).version)")
+          VERSION=$(bun -e "console.log(JSON.parse(require('node:fs').readFileSync('apps/plugin/package.json', 'utf8')).version)")
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Validate tag matches package version
@@ -34,7 +34,7 @@ jobs:
           CURRENT_TAG: ${{ github.ref_name }}
         run: |
           if [ "$CURRENT_TAG" != "$EXPECTED_TAG" ]; then
-            echo "::error::推送的 tag ($CURRENT_TAG) 与 package.json 版本不一致，期望为 $EXPECTED_TAG"
+            echo "::error::推送的 tag ($CURRENT_TAG) 与 apps/plugin/package.json 版本不一致，期望为 $EXPECTED_TAG"
             exit 1
           fi
 
