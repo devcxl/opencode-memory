@@ -58,6 +58,8 @@ export interface IFileStorageProvider {
   writeFile(path: string, content: string): Promise<void>;
   appendFile(path: string, content: string): Promise<void>;
   deleteFile(path: string): Promise<void>;
+  /** 按时间戳删除单条记录，返回删除结果描述；远程模式下匹配具体记录，本地模式重写文件 */
+  deleteByTimestamp?(path: string, timestamp: string): Promise<string>;
   exists(path: string): Promise<boolean>;
   listFiles(pattern: string): Promise<string[]>;
 }

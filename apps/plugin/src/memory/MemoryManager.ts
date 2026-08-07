@@ -344,6 +344,15 @@ export class MemoryManager {
       date,
       project,
     );
+
+    // remote 模式：记录独立存储，委托 provider 删除具体那条记录
+    if (
+      this.mode === "remote" &&
+      typeof this.providers.fileStorage.deleteByTimestamp === "function"
+    ) {
+      return this.providers.fileStorage.deleteByTimestamp(filePath, timestamp);
+    }
+
     const content = await this.providers.fileStorage.readFile(filePath);
 
     if (!content) {

@@ -177,6 +177,64 @@ export class RemoteFileStorageProvider implements IFileStorageProvider {
     }
   }
 
+  /**
+   * 按时间戳删除单条记录。
+   * 远程模式下每条记录独立存储，不能像本地那样整体重写文件。
+   * 通过 list 该路径下的记录，匹配 created_at 对应的时间戳，再删除具体那条。
+   */
+  async deleteByTimestamp(path: string, timestamp: string): Promise<string> {
+    const { category, sub_type, project_id, date } = this.parsePath(path);
+
+    switch (category) {
+      case "instruction": {
+        const instructions = await this.client.listInstructions({
+          type: sub_type || undefined,
+          project_id: project_id || undefined,
+        });
+        const target = instructions.find(
+          (r) => this.formatTs(r.created_at) === timestamp,
+        );
+        if (!target)
+          throw new Error(`No entries found matching timestamp: ${timestamp}`);
+        await this.client.deleteInstruction(target.id);
+        return `Deleted instruction from ${path}`;
+      }
+      case "learning": {
+        const learnings = await this.client.listLearnings({
+          type: sub_type || undefined,
+          project_id: project_id || undefined,
+        });
+        const target = learnings.find(
+          (r) => this.formatTs(r.created_at) === timestamp,
+        );
+        if (!target)
+          throw new Error(`No entries found matching timestamp: ${timestamp}`);
+        await this.client.deleteLearning(target.id);
+        return `Deleted learning from ${path}`;
+      }
+      case "daily": {
+        const dailies = await this.client.listDailies({
+          project_id: project_id || undefined,
+          date: date || undefined,
+        });
+        const target = dailies.find(
+          (r) => this.formatTs(r.created_at) === timestamp,
+        );
+        if (!target)
+          throw new Error(`No entries found matching timestamp: ${timestamp}`);
+        await this.client.deleteDaily(target.id);
+        return `Deleted daily from ${path}`;
+      }
+      default:
+        throw new Error(`Unknown category: ${category}`);
+    }
+  }
+
+  /** 将记录创建时间格式化为与 readFile 时间戳一致的字符串 */
+  private formatTs(createdAt: number): string {
+    return new Date(createdAt).toISOString().replace("T", " ").slice(0, 19);
+  }
+
   async exists(path: string): Promise<boolean> {
     const content = await this.readFile(path);
     return content !== null;

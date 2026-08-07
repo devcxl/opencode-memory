@@ -1,5 +1,8 @@
 import { describe, test, expect, mock, beforeEach, afterEach } from "bun:test";
-import { MemoryClient, type RemoteConfig } from "../src/providers/remote/http-client.js";
+import {
+  MemoryClient,
+  type RemoteConfig,
+} from "../src/providers/remote/http-client.js";
 
 // ─── 测试辅助 ────────────────────────────────────────────────
 
@@ -9,7 +12,11 @@ const TEST_CONFIG: RemoteConfig = {
 };
 
 /** 创建 mock Response */
-function mockResponse(status: number, body: unknown, headers?: Record<string, string>): Response {
+function mockResponse(
+  status: number,
+  body: unknown,
+  headers?: Record<string, string>,
+): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: { "Content-Type": "application/json", ...headers },
@@ -40,10 +47,12 @@ describe("MemoryClient", () => {
     test("每个请求都附加正确 JWT Bearer token", async () => {
       const h = { auth: "" };
 
-      mockFetch(mock((input: RequestInfo | URL, init?: RequestInit): Response => {
-        h.auth = new Headers(init?.headers).get("Authorization") || "";
-        return mockResponse(200, { success: true, data: [] });
-      }) as unknown as typeof fetch);
+      mockFetch(
+        mock((input: RequestInfo | URL, init?: RequestInit): Response => {
+          h.auth = new Headers(init?.headers).get("Authorization") || "";
+          return mockResponse(200, { success: true, data: [] });
+        }) as unknown as typeof fetch,
+      );
 
       await client.list({});
 
@@ -55,10 +64,15 @@ describe("MemoryClient", () => {
     test("调用 POST /api/memories 并传递正确 body", async () => {
       let capturedBody: Record<string, unknown> = {};
 
-      mockFetch(mock((_input: RequestInfo | URL, init?: RequestInit): Response => {
-        capturedBody = JSON.parse(init?.body as string);
-        return mockResponse(200, { success: true, data: { id: "mem-123", indexed: true } });
-      }) as unknown as typeof fetch);
+      mockFetch(
+        mock((_input: RequestInfo | URL, init?: RequestInit): Response => {
+          capturedBody = JSON.parse(init?.body as string);
+          return mockResponse(200, {
+            success: true,
+            data: { id: "mem-123", indexed: true },
+          });
+        }) as unknown as typeof fetch,
+      );
 
       await client.write({
         text: "测试记忆内容",
@@ -79,24 +93,55 @@ describe("MemoryClient", () => {
   describe("search", () => {
     test("调用 POST /api/memories/search 并返回结果", async () => {
       const mockResults = [
-        { id: "1", user_id: "u1", kind: "long", text: "结果1", tags: "[]", created_at: 1000, archived: 0, score: 0.9, snippet: "结果1", matchCount: 1 },
-        { id: "2", user_id: "u1", kind: "long", text: "结果2", tags: "[]", created_at: 2000, archived: 0, score: 0.8, snippet: "结果2", matchCount: 1 },
+        {
+          id: "1",
+          user_id: "u1",
+          kind: "long",
+          text: "结果1",
+          tags: "[]",
+          created_at: 1000,
+          archived: 0,
+          score: 0.9,
+          snippet: "结果1",
+          matchCount: 1,
+        },
+        {
+          id: "2",
+          user_id: "u1",
+          kind: "long",
+          text: "结果2",
+          tags: "[]",
+          created_at: 2000,
+          archived: 0,
+          score: 0.8,
+          snippet: "结果2",
+          matchCount: 1,
+        },
       ];
 
-      mockFetch(mock((_input: RequestInfo | URL, _init?: RequestInit): Response => {
-        return mockResponse(200, { success: true, data: mockResults });
-      }) as unknown as typeof fetch);
+      mockFetch(
+        mock((_input: RequestInfo | URL, _init?: RequestInit): Response => {
+          return mockResponse(200, { success: true, data: mockResults });
+        }) as unknown as typeof fetch,
+      );
 
-      const results = await client.search({ query: "测试查询", topK: 5, file_type: "memory", project_id: "p1" });
+      const results = await client.search({
+        query: "测试查询",
+        topK: 5,
+        file_type: "memory",
+        project_id: "p1",
+      });
       expect(results).toHaveLength(2);
       expect(results[0].score).toBe(0.9);
       expect(results[1].score).toBe(0.8);
     });
 
     test("API 返回失败时返回空数组", async () => {
-      mockFetch(mock((): Response => {
-        return mockResponse(200, { success: false, error: "no results" });
-      }) as unknown as typeof fetch);
+      mockFetch(
+        mock((): Response => {
+          return mockResponse(200, { success: false, error: "no results" });
+        }) as unknown as typeof fetch,
+      );
 
       const results = await client.search({ query: "无结果" });
       expect(results).toEqual([]);
@@ -107,12 +152,32 @@ describe("MemoryClient", () => {
     test("调用 GET /api/memories 并拼接查询参数", async () => {
       let calledUrl = "";
 
-      mockFetch(mock((input: RequestInfo | URL, _init?: RequestInit): Response => {
-        calledUrl = input.toString();
-        return mockResponse(200, { success: true, data: [{ id: "1", user_id: "u1", kind: "long", text: "内容", tags: "[]", created_at: 1000, archived: 0 }] });
-      }) as unknown as typeof fetch);
+      mockFetch(
+        mock((input: RequestInfo | URL, _init?: RequestInit): Response => {
+          calledUrl = input.toString();
+          return mockResponse(200, {
+            success: true,
+            data: [
+              {
+                id: "1",
+                user_id: "u1",
+                kind: "long",
+                text: "内容",
+                tags: "[]",
+                created_at: 1000,
+                archived: 0,
+              },
+            ],
+          });
+        }) as unknown as typeof fetch,
+      );
 
-      await client.list({ kind: "long", limit: "10", file_type: "memory", project_id: "p1" });
+      await client.list({
+        kind: "long",
+        limit: "10",
+        file_type: "memory",
+        project_id: "p1",
+      });
 
       const url = new URL(calledUrl);
       expect(url.pathname).toBe("/api/memories");
@@ -123,18 +188,22 @@ describe("MemoryClient", () => {
     });
 
     test("返回空数组时 list 不报错", async () => {
-      mockFetch(mock((): Response => {
-        return mockResponse(200, { success: true, data: [] });
-      }) as unknown as typeof fetch);
+      mockFetch(
+        mock((): Response => {
+          return mockResponse(200, { success: true, data: [] });
+        }) as unknown as typeof fetch,
+      );
 
       const result = await client.list({});
       expect(result).toEqual([]);
     });
 
     test("API 返回 success:false 时返回空数组", async () => {
-      mockFetch(mock((): Response => {
-        return mockResponse(200, { success: false, data: [] });
-      }) as unknown as typeof fetch);
+      mockFetch(
+        mock((): Response => {
+          return mockResponse(200, { success: false, data: [] });
+        }) as unknown as typeof fetch,
+      );
 
       const result = await client.list({});
       expect(result).toEqual([]);
@@ -146,11 +215,13 @@ describe("MemoryClient", () => {
       let calledMethod = "";
       let calledUrl = "";
 
-      mockFetch(mock((input: RequestInfo | URL, init?: RequestInit): Response => {
-        calledMethod = init?.method || "GET";
-        calledUrl = input.toString();
-        return mockResponse(200, { success: true });
-      }) as unknown as typeof fetch);
+      mockFetch(
+        mock((input: RequestInfo | URL, init?: RequestInit): Response => {
+          calledMethod = init?.method || "GET";
+          calledUrl = input.toString();
+          return mockResponse(200, { success: true });
+        }) as unknown as typeof fetch,
+      );
 
       await client.delete("mem-abc");
 
@@ -163,10 +234,15 @@ describe("MemoryClient", () => {
     test("调用 GET /api/context 并拼接 project_id", async () => {
       let calledUrl = "";
 
-      mockFetch(mock((input: RequestInfo | URL, _init?: RequestInit): Response => {
-        calledUrl = input.toString();
-        return mockResponse(200, { success: true, data: "## MEMORY.md\n\n记忆内容" });
-      }) as unknown as typeof fetch);
+      mockFetch(
+        mock((input: RequestInfo | URL, _init?: RequestInit): Response => {
+          calledUrl = input.toString();
+          return mockResponse(200, {
+            success: true,
+            data: "## MEMORY.md\n\n记忆内容",
+          });
+        }) as unknown as typeof fetch,
+      );
 
       const context = await client.getContext("owner/repo");
 
@@ -179,10 +255,12 @@ describe("MemoryClient", () => {
     test("获取全局 context 时不传 project_id", async () => {
       let calledUrl = "";
 
-      mockFetch(mock((input: RequestInfo | URL, _init?: RequestInit): Response => {
-        calledUrl = input.toString();
-        return mockResponse(200, { success: true, data: "内容" });
-      }) as unknown as typeof fetch);
+      mockFetch(
+        mock((input: RequestInfo | URL, _init?: RequestInit): Response => {
+          calledUrl = input.toString();
+          return mockResponse(200, { success: true, data: "内容" });
+        }) as unknown as typeof fetch,
+      );
 
       await client.getContext();
 
@@ -193,33 +271,53 @@ describe("MemoryClient", () => {
 
   describe("错误处理", () => {
     test("401 → 抛出授权错误", async () => {
-      mockFetch(mock((): Response => {
-        return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { "Content-Type": "application/json" } });
-      }) as unknown as typeof fetch);
+      mockFetch(
+        mock((): Response => {
+          return new Response(JSON.stringify({ error: "Unauthorized" }), {
+            status: 401,
+            headers: { "Content-Type": "application/json" },
+          });
+        }) as unknown as typeof fetch,
+      );
 
       await expect(client.list({})).rejects.toThrow(/401/);
     });
 
     test("429 → 抛出限流错误", async () => {
-      mockFetch(mock((): Response => {
-        return new Response(JSON.stringify({ error: "Too many requests" }), { status: 429, headers: { "Content-Type": "application/json" } });
-      }) as unknown as typeof fetch);
+      mockFetch(
+        mock((): Response => {
+          return new Response(JSON.stringify({ error: "Too many requests" }), {
+            status: 429,
+            headers: { "Content-Type": "application/json" },
+          });
+        }) as unknown as typeof fetch,
+      );
 
       await expect(client.list({})).rejects.toThrow(/429/);
     });
 
     test("500 → 抛出服务端错误", async () => {
-      mockFetch(mock((): Response => {
-        return new Response(JSON.stringify({ error: "Internal error" }), { status: 500, headers: { "Content-Type": "application/json" } });
-      }) as unknown as typeof fetch);
+      mockFetch(
+        mock((): Response => {
+          return new Response(JSON.stringify({ error: "Internal error" }), {
+            status: 500,
+            headers: { "Content-Type": "application/json" },
+          });
+        }) as unknown as typeof fetch,
+      );
 
       await expect(client.list({})).rejects.toThrow(/500/);
     });
 
     test("非 JSON 错误响应仍能抛出状态码错误", async () => {
-      mockFetch(mock((): Response => {
-        return new Response("Not JSON", { status: 502, headers: { "Content-Type": "text/plain" } });
-      }) as unknown as typeof fetch);
+      mockFetch(
+        mock((): Response => {
+          return new Response("Not JSON", {
+            status: 502,
+            headers: { "Content-Type": "text/plain" },
+          });
+        }) as unknown as typeof fetch,
+      );
 
       await expect(client.list({})).rejects.toThrow(/502/);
     });
@@ -240,14 +338,16 @@ describe("RemoteVectorIndexProvider", () => {
   test("delete 调用 DELETE /api/memories/:id", async () => {
     const deletedIds: string[] = [];
 
-    globalThis.fetch = mock((input: RequestInfo | URL, init?: RequestInit): Response => {
-      if (init?.method === "DELETE") {
-        const url = input.toString();
-        const id = url.split("/").pop() || "";
-        deletedIds.push(id);
-      }
-      return mockResponse(200, { success: true });
-    }) as unknown as typeof fetch;
+    globalThis.fetch = mock(
+      (input: RequestInfo | URL, init?: RequestInit): Response => {
+        if (init?.method === "DELETE") {
+          const url = input.toString();
+          const id = url.split("/").pop() || "";
+          deletedIds.push(id);
+        }
+        return mockResponse(200, { success: true });
+      },
+    ) as unknown as typeof fetch;
 
     await provider.delete(["mem-1", "mem-2"], "global");
 
@@ -258,23 +358,34 @@ describe("RemoteVectorIndexProvider", () => {
 
   test("upsert 暂不抛错（remote 下由 writeFile 触发）", async () => {
     // remote 模式下 upsert 批量场景预留，目前是空操作
-    await expect(
-      provider.upsert([], "global"),
-    ).resolves.toBeUndefined();
+    await expect(provider.upsert([], "global")).resolves.toBeUndefined();
   });
 
   test("search 直接调 Worker search（绕过向量）", async () => {
     let capturedBody: Record<string, unknown> = {};
 
-    globalThis.fetch = mock((_input: RequestInfo | URL, init?: RequestInit): Response => {
-      if (init?.body) capturedBody = JSON.parse(init.body as string);
-      return mockResponse(200, {
-        success: true,
-        data: [
-          { id: "r1", user_id: "u1", kind: "long", text: "匹配结果", tags: "[]", created_at: 1000, archived: 0, score: 0.95, snippet: "...", matchCount: 2 },
-        ],
-      });
-    }) as unknown as typeof fetch;
+    globalThis.fetch = mock(
+      (_input: RequestInfo | URL, init?: RequestInit): Response => {
+        if (init?.body) capturedBody = JSON.parse(init.body as string);
+        return mockResponse(200, {
+          success: true,
+          data: [
+            {
+              id: "r1",
+              user_id: "u1",
+              kind: "long",
+              text: "匹配结果",
+              tags: "[]",
+              created_at: 1000,
+              archived: 0,
+              score: 0.95,
+              snippet: "...",
+              matchCount: 2,
+            },
+          ],
+        });
+      },
+    ) as unknown as typeof fetch;
 
     const results = await provider.search([0.1, 0.2], 5, "project:owner/repo");
 
@@ -316,12 +427,20 @@ describe("RemoteFileStorageProvider", () => {
     test("调用 POST /api/memories 写入内容", async () => {
       let capturedBody: Record<string, unknown> = {};
 
-      globalThis.fetch = mock((_input: RequestInfo | URL, init?: RequestInit): Response => {
-        if (init?.body) capturedBody = JSON.parse(init.body as string);
-        return mockResponse(200, { success: true, data: { id: "m1", indexed: true } });
-      }) as unknown as typeof fetch;
+      globalThis.fetch = mock(
+        (_input: RequestInfo | URL, init?: RequestInit): Response => {
+          if (init?.body) capturedBody = JSON.parse(init.body as string);
+          return mockResponse(200, {
+            success: true,
+            data: { id: "m1", indexed: true },
+          });
+        },
+      ) as unknown as typeof fetch;
 
-      await provider.writeFile("learning:knowledge:project:owner/repo:2026-07-22", "新记忆内容");
+      await provider.writeFile(
+        "learning:knowledge:project:owner/repo:2026-07-22",
+        "新记忆内容",
+      );
 
       expect(capturedBody.type).toBe("knowledge");
       expect(capturedBody.content).toBe("新记忆内容");
@@ -334,10 +453,13 @@ describe("RemoteFileStorageProvider", () => {
     test("等同于 writeFile 调用 POST /api/dailies", async () => {
       let capturedText = "";
 
-      globalThis.fetch = mock((_input: RequestInfo | URL, init?: RequestInit): Response => {
-        if (init?.body) capturedText = JSON.parse(init.body as string).content;
-        return mockResponse(200, { success: true, data: { id: "m1" } });
-      }) as unknown as typeof fetch;
+      globalThis.fetch = mock(
+        (_input: RequestInfo | URL, init?: RequestInit): Response => {
+          if (init?.body)
+            capturedText = JSON.parse(init.body as string).content;
+          return mockResponse(200, { success: true, data: { id: "m1" } });
+        },
+      ) as unknown as typeof fetch;
 
       await provider.appendFile("daily:::2026-07-22", "今日日志");
 
@@ -347,17 +469,31 @@ describe("RemoteFileStorageProvider", () => {
 
   describe("readFile", () => {
     test("调用 GET /api/learnings 并拼接结果", async () => {
-      globalThis.fetch = mock((input: RequestInfo | URL, _init?: RequestInit): Response => {
-        return mockResponse(200, {
-          success: true,
-          data: [
-            { id: "1", title: "条目1", content: "条目1内容", created_at: 1712345678000 },
-            { id: "2", title: "条目2", content: "条目2内容", created_at: 1712345679000 },
-          ],
-        });
-      }) as unknown as typeof fetch;
+      globalThis.fetch = mock(
+        (input: RequestInfo | URL, _init?: RequestInit): Response => {
+          return mockResponse(200, {
+            success: true,
+            data: [
+              {
+                id: "1",
+                title: "条目1",
+                content: "条目1内容",
+                created_at: 1712345678000,
+              },
+              {
+                id: "2",
+                title: "条目2",
+                content: "条目2内容",
+                created_at: 1712345679000,
+              },
+            ],
+          });
+        },
+      ) as unknown as typeof fetch;
 
-      const result = await provider.readFile("learning:knowledge:project:owner/repo:2026-07-22");
+      const result = await provider.readFile(
+        "learning:knowledge:project:owner/repo:2026-07-22",
+      );
 
       expect(result).not.toBeNull();
       expect(result).toContain("条目1内容");
@@ -370,7 +506,9 @@ describe("RemoteFileStorageProvider", () => {
         return mockResponse(200, { success: true, data: [] });
       }) as unknown as typeof fetch;
 
-      const result = await provider.readFile("learning:knowledge:project:owner/repo:2026-07-22");
+      const result = await provider.readFile(
+        "learning:knowledge:project:owner/repo:2026-07-22",
+      );
       expect(result).toBeNull();
     });
 
@@ -379,7 +517,9 @@ describe("RemoteFileStorageProvider", () => {
         return mockResponse(200, { success: false, data: null });
       }) as unknown as typeof fetch;
 
-      const result = await provider.readFile("learning:knowledge:project:owner/repo:2026-07-22");
+      const result = await provider.readFile(
+        "learning:knowledge:project:owner/repo:2026-07-22",
+      );
       expect(result).toBeNull();
     });
   });
@@ -389,24 +529,28 @@ describe("RemoteFileStorageProvider", () => {
       const deletedIds: string[] = [];
       const listUrls: string[] = [];
 
-      globalThis.fetch = mock((input: RequestInfo | URL, init?: RequestInit): Response => {
-        if (init?.method === "DELETE") {
-          const id = input.toString().split("/").pop() || "";
-          deletedIds.push(id);
-          return mockResponse(200, { success: true });
-        }
-        // list 请求
-        listUrls.push(input.toString());
-        return mockResponse(200, {
-          success: true,
-          data: [
-            { id: "a1", title: "x", content: "x", created_at: 1 },
-            { id: "a2", title: "x", content: "x", created_at: 1 },
-          ],
-        });
-      }) as unknown as typeof fetch;
+      globalThis.fetch = mock(
+        (input: RequestInfo | URL, init?: RequestInit): Response => {
+          if (init?.method === "DELETE") {
+            const id = input.toString().split("/").pop() || "";
+            deletedIds.push(id);
+            return mockResponse(200, { success: true });
+          }
+          // list 请求
+          listUrls.push(input.toString());
+          return mockResponse(200, {
+            success: true,
+            data: [
+              { id: "a1", title: "x", content: "x", created_at: 1 },
+              { id: "a2", title: "x", content: "x", created_at: 1 },
+            ],
+          });
+        },
+      ) as unknown as typeof fetch;
 
-      await provider.deleteFile("learning:knowledge:project:owner/repo:2026-07-22");
+      await provider.deleteFile(
+        "learning:knowledge:project:owner/repo:2026-07-22",
+      );
 
       expect(deletedIds).toContain("a1");
       expect(deletedIds).toContain("a2");
@@ -415,18 +559,22 @@ describe("RemoteFileStorageProvider", () => {
     test("按 path 的 type/project 过滤，避免误删其他记录", async () => {
       const listUrls: string[] = [];
 
-      globalThis.fetch = mock((input: RequestInfo | URL, init?: RequestInit): Response => {
-        if (init?.method === "DELETE") {
-          return mockResponse(200, { success: true });
-        }
-        listUrls.push(input.toString());
-        return mockResponse(200, {
-          success: true,
-          data: [{ id: "a1", title: "x", content: "x", created_at: 1 }],
-        });
-      }) as unknown as typeof fetch;
+      globalThis.fetch = mock(
+        (input: RequestInfo | URL, init?: RequestInit): Response => {
+          if (init?.method === "DELETE") {
+            return mockResponse(200, { success: true });
+          }
+          listUrls.push(input.toString());
+          return mockResponse(200, {
+            success: true,
+            data: [{ id: "a1", title: "x", content: "x", created_at: 1 }],
+          });
+        },
+      ) as unknown as typeof fetch;
 
-      await provider.deleteFile("learning:preference:project:devcxl/LaseAI:2026-07-22");
+      await provider.deleteFile(
+        "learning:preference:project:devcxl/LaseAI:2026-07-22",
+      );
 
       expect(listUrls.length).toBe(1);
       const url = new URL(listUrls[0]);
@@ -435,16 +583,95 @@ describe("RemoteFileStorageProvider", () => {
     });
   });
 
+  describe("deleteByTimestamp", () => {
+    test("按时间戳匹配具体记录并删除，而非重写新增", async () => {
+      const createdAt = 1712345678000;
+      const ts = new Date(createdAt)
+        .toISOString()
+        .replace("T", " ")
+        .slice(0, 19);
+      const deletedIds: string[] = [];
+
+      globalThis.fetch = mock(
+        (input: RequestInfo | URL, init?: RequestInit): Response => {
+          if (init?.method === "DELETE") {
+            const id = input.toString().split("/").pop() || "";
+            deletedIds.push(id);
+            return mockResponse(200, { success: true });
+          }
+          // list 请求
+          return mockResponse(200, {
+            success: true,
+            data: [
+              {
+                id: "match-1",
+                title: "x",
+                content: "x",
+                created_at: createdAt,
+              },
+              {
+                id: "keep-2",
+                title: "x",
+                content: "x",
+                created_at: createdAt + 1000,
+              },
+            ],
+          });
+        },
+      ) as unknown as typeof fetch;
+
+      const result = await provider.deleteByTimestamp(
+        "learning:knowledge:project:owner/repo:2026-07-22",
+        ts,
+      );
+
+      expect(deletedIds).toEqual(["match-1"]);
+      expect(result).toContain("Deleted learning");
+    });
+
+    test("无匹配时间戳时抛错且不删除", async () => {
+      const deletedIds: string[] = [];
+
+      globalThis.fetch = mock(
+        (input: RequestInfo | URL, init?: RequestInit): Response => {
+          if (init?.method === "DELETE") {
+            deletedIds.push(input.toString());
+            return mockResponse(200, { success: true });
+          }
+          return mockResponse(200, {
+            success: true,
+            data: [
+              { id: "a1", title: "x", content: "x", created_at: 1712345678000 },
+            ],
+          });
+        },
+      ) as unknown as typeof fetch;
+
+      await expect(
+        provider.deleteByTimestamp(
+          "learning:knowledge:project:owner/repo:2026-07-22",
+          "1999-01-01 00:00:00",
+        ),
+      ).rejects.toThrow();
+
+      expect(deletedIds).toEqual([]);
+    });
+  });
+
   describe("exists", () => {
     test("有内容返回 true", async () => {
       globalThis.fetch = mock((): Response => {
         return mockResponse(200, {
           success: true,
-          data: [{ id: "x", title: "有内容", content: "有内容", created_at: 1 }],
+          data: [
+            { id: "x", title: "有内容", content: "有内容", created_at: 1 },
+          ],
         });
       }) as unknown as typeof fetch;
 
-      expect(await provider.exists("learning:knowledge:project:p1:2026-07-22")).toBe(true);
+      expect(
+        await provider.exists("learning:knowledge:project:p1:2026-07-22"),
+      ).toBe(true);
     });
 
     test("无内容返回 false", async () => {
@@ -452,7 +679,9 @@ describe("RemoteFileStorageProvider", () => {
         return mockResponse(200, { success: true, data: [] });
       }) as unknown as typeof fetch;
 
-      expect(await provider.exists("learning:knowledge:project:p1:2026-07-22")).toBe(false);
+      expect(
+        await provider.exists("learning:knowledge:project:p1:2026-07-22"),
+      ).toBe(false);
     });
   });
 
@@ -467,15 +696,28 @@ describe("RemoteFileStorageProvider", () => {
     test("调用 POST /api/memories/search", async () => {
       let capturedBody: Record<string, unknown> = {};
 
-      globalThis.fetch = mock((_input: RequestInfo | URL, init?: RequestInit): Response => {
-        if (init?.body) capturedBody = JSON.parse(init.body as string);
-        return mockResponse(200, {
-          success: true,
-          data: [
-            { id: "s1", user_id: "u1", kind: "long", text: "搜索结果", tags: "[]", created_at: 1, archived: 0, score: 0.9, snippet: "...", matchCount: 1 },
-          ],
-        });
-      }) as unknown as typeof fetch;
+      globalThis.fetch = mock(
+        (_input: RequestInfo | URL, init?: RequestInit): Response => {
+          if (init?.body) capturedBody = JSON.parse(init.body as string);
+          return mockResponse(200, {
+            success: true,
+            data: [
+              {
+                id: "s1",
+                user_id: "u1",
+                kind: "long",
+                text: "搜索结果",
+                tags: "[]",
+                created_at: 1,
+                archived: 0,
+                score: 0.9,
+                snippet: "...",
+                matchCount: 1,
+              },
+            ],
+          });
+        },
+      ) as unknown as typeof fetch;
 
       const results = await provider.search("测试查询", 5, "memory", "p1");
 
@@ -496,7 +738,9 @@ describe("RemoteFileStorageProvider", () => {
         });
       }) as unknown as typeof fetch;
 
-      await expect(provider.readFile("learning:knowledge:::")).rejects.toThrow(/401/);
+      await expect(provider.readFile("learning:knowledge:::")).rejects.toThrow(
+        /401/,
+      );
     });
   });
 });
