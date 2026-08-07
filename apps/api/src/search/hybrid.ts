@@ -1,5 +1,6 @@
 import type { AskResponse, Env, KeywordSearchResult, Memory, RagCitation } from '../types'
 import { searchMemoriesByKeywordForRag, type FtsMemoryResult } from './keyword-search'
+import { crossTableSearch } from './cross-table'
 import { preprocessQuery } from './tokenizer'
 import { normalizeScores, recencyBoost, RECENCY_WEIGHT } from './scoring'
 
@@ -339,23 +340,31 @@ export async function answerQuestion(
 
   const topK = Math.max(options.topK || MIN_ASK_TOP_K, MIN_ASK_TOP_K)
 
-  // 并行执行两种检索
-  const [vectorResults, ftsResults] = await Promise.all([
-    retrieveRankedMemories(env, runAIWithTimeout, { ...options, topK })
-      .catch(() => [] as RankedMemory[]),
-    searchMemoriesByKeywordForRag(env, {
-      query: options.query,
-      userId: options.userId,
-      kind: options.kind,
-      limit: topK,
-    }).catch(() => [] as FtsMemoryResult[]),
-  ])
+  // 基于结构化记忆（learnings/instructions/dailies）的跨表检索
+  const crossResults = await crossTableSearch(env, runAIWithTimeout, {
+    query: options.query,
+    userId: options.userId,
+    kind: options.kind,
+    topK,
+  }).catch(() => [] as KeywordSearchResult[])
 
-  // 归一化后 RRF 融合
-  const normalizedVector = normalizeScores(vectorResults)
-  const normalizedFts = ftsResults.map(r => ({ ...r, score: r.bm25Score }))
-  const normalizedFtsScores = normalizeScores(normalizedFts)
-  const rankedMemories = reciprocalRankFusion(normalizedVector, normalizedFtsScores, topK)
+  const rankedMemories: RankedMemory[] = crossResults.map((r) => ({
+    id: r.id,
+    user_id: r.user_id,
+    kind: (r.kind || 'long') as 'short' | 'long',
+    text: r.text,
+    tags: r.tags || '[]',
+    source: undefined,
+    created_at: r.created_at,
+    expires_at: null,
+    consolidated_at: null,
+    archived: 0,
+    project_id: r.project_id || '',
+    file_type: r.file_type || 'memory',
+    date: r.date || null,
+    vectorScore: r.score || 0,
+    score: r.score || 0,
+  }))
 
   if (rankedMemories.length === 0) {
     return { answer: 'I could not find relevant memories for that question.', citations: [] }

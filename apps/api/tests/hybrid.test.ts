@@ -1,36 +1,30 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { answerQuestion } from '../src/search/hybrid'
-import type { Env, Memory } from '../src/types'
+import type { Env } from '../src/types'
 
-const baseMemory: Memory = {
+const learningRecord = {
   id: 'memory-1',
-  user_id: 'user-1',
-  kind: 'short',
-  text: 'Today I learned how to deploy Cloudflare Workers with D1 and Vectorize indexing.',
-  tags: '[]',
+  content:
+    'Today I learned how to deploy Cloudflare Workers with D1 and Vectorize indexing.',
   created_at: 1_777_099_454_001,
-  archived: 0,
-  source: undefined,
-  expires_at: null,
-  consolidated_at: null,
-  project_id: '',
-  file_type: 'memory',
 }
 
-function createEnv(memory: Memory = baseMemory): Env {
+function createEnv(record: typeof learningRecord = learningRecord): Env {
   const db = {
     prepare(sql: string) {
       return {
         bind(..._args: unknown[]) {
           return {
             async all<T>() {
-              if (sql.includes('FROM memories_fts')) {
+              // FTS 查询（learnings/dailies）
+              if (sql.includes('_fts')) {
                 return { results: [] as T[] }
               }
 
-              if (sql.includes('FROM memories WHERE id IN')) {
-                return { results: [memory] as T[] }
+              // 向量命中的记录还原：按 id 查询结构化表
+              if (sql.includes('FROM learnings WHERE id IN') || sql.includes('FROM instructions WHERE id IN') || sql.includes('FROM dailies WHERE id IN')) {
+                return { results: [record] as T[] }
               }
 
               return { results: [] as T[] }
@@ -43,13 +37,26 @@ function createEnv(memory: Memory = baseMemory): Env {
 
   const vec = {
     async query(_vector: number[], _options: unknown) {
-      return { matches: [{ id: memory.id, score: 0.92 }] }
+      return {
+        matches: [
+          {
+            id: record.id,
+            score: 0.92,
+            metadata: { source_table: 'learnings' },
+          },
+        ],
+      }
     },
+    async upsert() {},
+    async describe() { return {} },
+    async insert() {},
+    async deleteByIds() {},
+    async getByIds() { return { results: [] } },
   }
 
   return {
     DB: db as Env['DB'],
-    VEC: vec as Env['VEC'],
+    VEC: vec as unknown as Env['VEC'],
     AI: {
       async run() {
         throw new Error('AI.run should be mocked via runAIWithTimeout')

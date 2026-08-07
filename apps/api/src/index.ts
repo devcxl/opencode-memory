@@ -4,7 +4,7 @@ import { HTTPException } from 'hono/http-exception'
 import { jwtVerify } from 'jose'
 import { z } from 'zod'
 import { consolidateMemories, cleanupExpiredMemories } from './cron/consolidate'
-import { replaceMemoryIndex } from './search/indexing'
+import { upsertMemoryVector, type IndexableMemory } from './search/indexing'
 import { searchMemoriesByKeyword } from './search/keyword-search'
 import { answerQuestion } from './search/hybrid'
 import { runAIWithTimeout } from './utils/ai'
@@ -500,30 +500,87 @@ app.post('/api/admin/reindex', async (c) => {
   let processed = 0
   const errors: string[] = []
 
+  if (!c.env.AI || !c.env.VEC) {
+    return c.json({
+      success: true,
+      data: { total: 0, success: 0, failed: 0, skipped: 0, errors: ['AI/VEC not configured'] }
+    })
+  }
+
+  const indexOne = async (label: string, item: IndexableMemory) => {
+    try {
+      await upsertMemoryVector({ env: c.env, runAIWithTimeout, withRetry }, item)
+      success++
+    } catch (error) {
+      failed++
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error'
+      errors.push(`${label} ${item.id}: ${errorMsg}`)
+      console.error(`Failed to index ${label} ${item.id}:`, error)
+    }
+    processed++
+  }
+
+  // 旧 memories 表（short/long）
   const { results: memories } = await c.env.DB.prepare(
     'SELECT id, user_id, kind, text, created_at, project_id, file_type, date FROM memories WHERE archived = 0 ORDER BY created_at DESC'
   ).all<{ id: string; user_id: string; kind: 'short' | 'long'; text: string; created_at: number; project_id: string; file_type: string; date: string | null }>()
 
   for (const memory of memories || []) {
-    if (!c.env.AI || !c.env.VEC) {
-      skipped++
-      continue
-    }
+    await indexOne('Memory', memory)
+  }
 
-    try {
-      await replaceMemoryIndex(
-        { env: c.env, runAIWithTimeout, withRetry },
-        memory
-      )
-      success++
-    } catch (error) {
-      failed++
-      const errorMsg = error instanceof Error ? error.message : 'Unknown error'
-      errors.push(`Memory ${memory.id}: ${errorMsg}`)
-      console.error(`Failed to index memory ${memory.id}:`, error)
-    }
+  // 结构化表：learnings
+  const { results: learnings } = await c.env.DB.prepare(
+    'SELECT id, user_id, title, content, scope, project_id, created_at FROM learnings WHERE archived = 0 ORDER BY created_at DESC'
+  ).all<{ id: string; user_id: string; title: string; content: string; scope: string; project_id: string; created_at: number }>()
 
-    processed++
+  for (const l of learnings || []) {
+    await indexOne('Learning', {
+      id: l.id,
+      user_id: l.user_id,
+      kind: 'long',
+      text: `${l.title}\n${l.content}`,
+      created_at: l.created_at,
+      project_id: l.project_id,
+      file_type: l.scope || 'learning',
+      source_table: 'learnings',
+    })
+  }
+
+  // 结构化表：instructions
+  const { results: instructions } = await c.env.DB.prepare(
+    'SELECT id, user_id, title, content, scope, project_id, created_at FROM instructions WHERE archived = 0 ORDER BY created_at DESC'
+  ).all<{ id: string; user_id: string; title: string; content: string; scope: string; project_id: string; created_at: number }>()
+
+  for (const it of instructions || []) {
+    await indexOne('Instruction', {
+      id: it.id,
+      user_id: it.user_id,
+      kind: 'long',
+      text: `${it.title}\n${it.content}`,
+      created_at: it.created_at,
+      project_id: it.project_id,
+      file_type: it.scope || 'instruction',
+      source_table: 'instructions',
+    })
+  }
+
+  // 结构化表：dailies
+  const { results: dailies } = await c.env.DB.prepare(
+    'SELECT id, user_id, content, project_id, date, created_at FROM dailies WHERE archived = 0 ORDER BY created_at DESC'
+  ).all<{ id: string; user_id: string; content: string; project_id: string; date: string; created_at: number }>()
+
+  for (const d of dailies || []) {
+    await indexOne('Daily', {
+      id: d.id,
+      user_id: d.user_id,
+      kind: 'long',
+      text: d.content,
+      created_at: d.created_at,
+      project_id: d.project_id,
+      file_type: d.date || 'daily',
+      source_table: 'dailies',
+    })
   }
 
   return c.json({
