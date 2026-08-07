@@ -132,6 +132,7 @@ export async function crossTableSearch(
   const vecResults = await env.VEC.query(embedding.data[0], {
     topK: Math.max(topK * 3, topK),
     filter: vecFilter,
+    returnMetadata: 'all',
   })
 
   const vecMatches = (vecResults.matches || []) as VectorMatch[]
