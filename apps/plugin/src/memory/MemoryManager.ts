@@ -119,6 +119,11 @@ export class MemoryManager {
     return this.paths.dailyPath(date);
   }
 
+  /** 是否为 remote 模式（记录独立存储，时间戳由服务端 created_at 决定） */
+  isRemote(): boolean {
+    return this.mode === "remote";
+  }
+
   /**
    * 获取或创建指定项目的向量存储实例
    * 使用延迟初始化，只在首次访问时创建 ProjectStore
@@ -386,15 +391,13 @@ export class MemoryManager {
    * 用于 daily log 等持续追加的场景，并保持向量索引与 git 提交一致
    */
   async appendFile(filePath: string, content: string): Promise<void> {
-    const timestamp = this.getLocalTimestamp();
-    const stamped = `<!-- ${timestamp} -->\n${content}`;
-
     // remote 模式：记录独立存储，一次追加即一条新记录，不读回拼接
+    // 不嵌入时间戳：记录时间由服务端 created_at 决定，readFile 时再生成展示时间戳
     if (this.mode === "remote") {
       checkLineLimit(filePath, content);
       await this.persistAndIndex(
         filePath,
-        stamped,
+        content,
         `Append to ${path.basename(filePath)}`,
         true,
       );
@@ -402,6 +405,9 @@ export class MemoryManager {
     }
 
     // local 模式：读回现有内容后整体重写
+    // 本地文件按时间戳标记区分条目（delete/list 均依赖），追加时必须嵌入
+    const timestamp = this.getLocalTimestamp();
+    const stamped = `<!-- ${timestamp} -->\n${content}`;
     const existing = await this.providers.fileStorage.readFile(filePath);
     const separator = existing?.trim() ? "\n\n" : "";
     const newContent = (existing ?? "") + separator + stamped;

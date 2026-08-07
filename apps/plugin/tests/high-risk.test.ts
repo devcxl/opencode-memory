@@ -1393,5 +1393,50 @@ test("remote mode appendFile writes single record, not accumulated content", asy
     expect(writes[0]).toContain("第一次记录");
     expect(writes[1]).not.toContain("第一次记录");
     expect(writes[1]).toContain("第二次记录");
+    // remote 记录独立存储且时间由服务端决定，不嵌入本地时间戳
+    expect(writes[0]).not.toContain("<!--");
+    expect(writes[1]).not.toContain("<!--");
+  });
+});
+
+test("remote mode handleWrite does not return local Timestamp", async () => {
+  await withTempMemory(async (memoryDir) => {
+    const manager = new MemoryManager(
+      { memoryDir, mode: "remote" },
+      {
+        vectorIndex: {
+          upsert: async () => {},
+          search: async () => [],
+          delete: async () => {},
+        },
+        embedding: {
+          embedTexts: async () => [],
+          dimensions: 384,
+          modelId: "mock",
+        },
+        fileStorage: {
+          readFile: async () => null,
+          writeFile: async () => {},
+          appendFile: async () => {},
+          deleteFile: async () => {},
+          exists: async () => false,
+          listFiles: async () => [],
+        },
+      },
+    );
+    await manager.ensureDirectories();
+
+    const result = await handleWrite(
+      {
+        target: "daily",
+        content: "远程日志",
+      },
+      manager,
+    );
+
+    expect(result).toStartWith("[scope: global] Appended to ");
+    // 本地时间戳对 remote 无意义，不应返回，避免误导 AI 用错误时间戳删除
+    expect(result).not.toContain("Timestamp:");
+    expect(result).toContain("read/list");
   });
 });

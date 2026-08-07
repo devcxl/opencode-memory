@@ -64,8 +64,6 @@ export async function handleWrite(
       scope,
     );
 
-    const timestamp = memoryManager.getLocalTimestamp();
-
     const effectiveContent = title ? `## ${title}\n${content}` : content;
 
     if (mode === "overwrite") {
@@ -88,7 +86,12 @@ export async function handleWrite(
       "4. How does this connect to previous memories?",
     ].join("\n");
 
-    return `${scopeTag} ${mode === "overwrite" ? "Wrote to" : "Appended to"} ${displayName}.${reflectionPrompt}\n\nTimestamp: ${timestamp}`;
+    const result = `${scopeTag} ${mode === "overwrite" ? "Wrote to" : "Appended to"} ${displayName}.${reflectionPrompt}`;
+    // remote 模式：记录时间由服务端 created_at 决定，本地时间戳无意义且会误导删除
+    if (memoryManager.isRemote()) {
+      return `${result}\n\n(remote 记录时间以 read/list 返回的时间戳为准)`;
+    }
+    return `${result}\n\nTimestamp: ${memoryManager.getLocalTimestamp()}`;
   } catch (error) {
     return toErrorMessage(error, `Unknown target: ${target}`);
   }
