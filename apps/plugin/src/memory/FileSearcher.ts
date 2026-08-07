@@ -261,36 +261,46 @@ export class FileSearcher {
     return result;
   }
 
-  /**
-   * 按月份分组列出文件，返回根文件列表和按月聚合的 daily 分组
-   * 每月包含文件数、条目数等统计，按月份倒序排列
-   */
-  async listFilesGroupedByMonth(): Promise<{
+  /** 获取所有文件：remote 走 provider 枚举，local 读本地目录 */
+  private async getAllFiles(): Promise<{
     root: Array<{ name: string; timestamps: string[] }>;
-    monthly: MonthGroup[];
+    daily: Array<{ name: string; timestamps: string[] }>;
   }> {
-    const { root, daily } = this.listFiles();
-
-    const rootFiles: Array<{ name: string; timestamps: string[] }> = [];
-    for (const file of root) {
-      const timestamps = await this.getTimestamps(this.memoryDir, file);
-      rootFiles.push({ name: file, timestamps });
+    if (this.mode === "remote" && this.fileStorage.listAll) {
+      return this.fileStorage.listAll();
     }
 
+    const { root, daily } = this.listFiles();
+    const rootFiles: Array<{ name: string; timestamps: string[] }> = [];
+    for (const file of root) {
+      rootFiles.push({
+        name: file,
+        timestamps: await this.getTimestamps(this.memoryDir, file),
+      });
+    }
+    const dailyFiles: Array<{ name: string; timestamps: string[] }> = [];
+    for (const file of daily) {
+      dailyFiles.push({
+        name: `daily/${file}`,
+        timestamps: await this.getTimestamps(this.dailyDir, file),
+      });
+    }
+    return { root: rootFiles, daily: dailyFiles };
+  }
+
+  /** 按月份聚合 daily 文件，按月份倒序 */
+  private groupDailyByMonth(
+    daily: Array<{ name: string; timestamps: string[] }>,
+  ): MonthGroup[] {
     const monthlyMap = new Map<
       string,
       Array<{ name: string; timestamps: string[] }>
     >();
-
     for (const file of daily) {
-      const dateStr = file.replace(".md", "");
+      const dateStr = file.name.replace(/^daily\//, "").replace(/\.md$/, "");
       const month = dateStr.slice(0, 7);
-      const timestamps = await this.getTimestamps(this.dailyDir, file);
-
-      if (!monthlyMap.has(month)) {
-        monthlyMap.set(month, []);
-      }
-      monthlyMap.get(month)!.push({ name: `daily/${file}`, timestamps });
+      if (!monthlyMap.has(month)) monthlyMap.set(month, []);
+      monthlyMap.get(month)!.push(file);
     }
 
     const monthly: MonthGroup[] = [];
@@ -303,10 +313,20 @@ export class FileSearcher {
         files,
       });
     }
-
     monthly.sort((a, b) => b.month.localeCompare(a.month));
+    return monthly;
+  }
 
-    return { root: rootFiles, monthly };
+  /**
+   * 按月份分组列出文件，返回根文件列表和按月聚合的 daily 分组
+   * 每月包含文件数、条目数等统计，按月份倒序排列
+   */
+  async listFilesGroupedByMonth(): Promise<{
+    root: Array<{ name: string; timestamps: string[] }>;
+    monthly: MonthGroup[];
+  }> {
+    const { root, daily } = await this.getAllFiles();
+    return { root, monthly: this.groupDailyByMonth(daily) };
   }
 
   /**
@@ -316,25 +336,11 @@ export class FileSearcher {
   async listFilesByPeriod(
     period: string,
   ): Promise<Array<{ name: string; timestamps: string[] }>> {
-    const { daily } = this.listFiles();
-    const result: Array<{ name: string; timestamps: string[] }> = [];
-
-    const filteredDaily = daily.filter((file) => {
-      const dateStr = file.replace(".md", "");
-      if (period.length === 7) {
-        return dateStr.startsWith(period);
-      }
-      if (period.length === 4) {
-        return dateStr.startsWith(period);
-      }
-      return false;
+    const { daily } = await this.getAllFiles();
+    return daily.filter((file) => {
+      const dateStr = file.name.replace(/^daily\//, "").replace(/\.md$/, "");
+      if (period.length !== 4 && period.length !== 7) return false;
+      return dateStr.startsWith(period);
     });
-
-    for (const file of filteredDaily) {
-      const timestamps = await this.getTimestamps(this.dailyDir, file);
-      result.push({ name: `daily/${file}`, timestamps });
-    }
-
-    return result;
   }
 }

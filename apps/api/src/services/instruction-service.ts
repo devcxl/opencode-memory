@@ -1,5 +1,5 @@
 import type { Env, Instruction, InstructionType, MemoryScope } from '../types'
-import { upsertMemoryVector, type IndexableMemory } from '../search/indexing'
+import { deleteMemoryIndex, upsertMemoryVector, type IndexableMemory } from '../search/indexing'
 import { runAIWithTimeout } from '../utils/ai'
 import { withRetry } from '../utils/retry'
 
@@ -126,6 +126,7 @@ export async function deleteInstruction(
     'UPDATE instructions SET archived = 1, updated_at = ? WHERE id = ? AND user_id = ?',
   ).bind(Date.now(), id, userId).run()
 
+  await deleteMemoryIndex(env, id)
   await upsertProjectStats(env, userId, instruction.project_id, 'instruction', -1)
 }
 

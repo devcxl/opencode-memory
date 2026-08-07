@@ -96,7 +96,8 @@ export class RemoteFileStorageProvider implements IFileStorageProvider {
     }
   }
 
-  async writeFile(path: string, content: string): Promise<void> {
+  /** 创建一条记录（append 语义：不删除已有记录） */
+  private async createRecord(path: string, content: string): Promise<void> {
     const { category, sub_type, scope, project_id, date } =
       this.parsePath(path);
 
@@ -135,18 +136,30 @@ export class RemoteFileStorageProvider implements IFileStorageProvider {
     }
   }
 
+  /**
+   * 覆盖写入（overwrite / edit 语义）。
+   * 远程模式下每条记录独立存储，覆盖 = 先删除该路径下所有已有记录，再创建一条。
+   */
+  async writeFile(path: string, content: string): Promise<void> {
+    await this.deleteFile(path);
+    await this.createRecord(path, content);
+  }
+
+  /** 追加写入：只新增一条记录，不删除已有记录 */
   async appendFile(path: string, content: string): Promise<void> {
-    return this.writeFile(path, content);
+    return this.createRecord(path, content);
   }
 
   async deleteFile(path: string): Promise<void> {
-    const { category, sub_type, project_id, date } = this.parsePath(path);
+    const { category, sub_type, scope, project_id, date } =
+      this.parsePath(path);
 
     // Read back and delete only records matching this path's filters
     switch (category) {
       case "instruction": {
         const instructions = await this.client.listInstructions({
           type: sub_type || undefined,
+          scope: scope || undefined,
           project_id: project_id || undefined,
         });
         for (const r of instructions) {
@@ -157,6 +170,7 @@ export class RemoteFileStorageProvider implements IFileStorageProvider {
       case "learning": {
         const learnings = await this.client.listLearnings({
           type: sub_type || undefined,
+          scope: scope || undefined,
           project_id: project_id || undefined,
         });
         for (const r of learnings) {
@@ -242,6 +256,63 @@ export class RemoteFileStorageProvider implements IFileStorageProvider {
 
   async listFiles(_pattern: string): Promise<string[]> {
     return [];
+  }
+
+  /**
+   * 枚举所有逻辑文件及时间戳（remote 模式 list 用）。
+   * 与 readFile 的路径语义保持一致：IDENTITY/USER/MEMORY 分别对应
+   * instruction:identity / learning:preference / learning:knowledge，
+   * daily 按日期命名的记录聚合。
+   */
+  async listAll(): Promise<{
+    root: Array<{ name: string; timestamps: string[] }>;
+    daily: Array<{ name: string; timestamps: string[] }>;
+  }> {
+    const [identityRows, preferences, knowledge, dailies] = await Promise.all([
+      this.client.listInstructions({ type: "identity" }),
+      this.client.listLearnings({ type: "preference" }),
+      this.client.listLearnings({ type: "knowledge" }),
+      this.client.listDailies({ limit: 100 }),
+    ]);
+
+    const ts = (n: number) =>
+      new Date(n).toISOString().replace("T", " ").slice(0, 19);
+
+    const root: Array<{ name: string; timestamps: string[] }> = [];
+    if (identityRows?.length) {
+      root.push({
+        name: "IDENTITY.md",
+        timestamps: identityRows.map((r) => ts(r.created_at)),
+      });
+    }
+    if (preferences?.length) {
+      root.push({
+        name: "USER.md",
+        timestamps: preferences.map((r) => ts(r.created_at)),
+      });
+    }
+    if (knowledge?.length) {
+      root.push({
+        name: "MEMORY.md",
+        timestamps: knowledge.map((r) => ts(r.created_at)),
+      });
+    }
+
+    const dailyMap = new Map<string, string[]>();
+    for (const d of dailies || []) {
+      const date = d.date || new Date(d.created_at).toISOString().slice(0, 10);
+      if (!dailyMap.has(date)) dailyMap.set(date, []);
+      dailyMap.get(date)!.push(ts(d.created_at));
+    }
+
+    const daily = Array.from(dailyMap.entries())
+      .map(([date, timestamps]) => ({
+        name: `daily/${date}.md`,
+        timestamps,
+      }))
+      .sort((a, b) => b.name.localeCompare(a.name));
+
+    return { root, daily };
   }
 
   async search(

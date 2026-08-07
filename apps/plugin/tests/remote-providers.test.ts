@@ -424,15 +424,34 @@ describe("RemoteFileStorageProvider", () => {
   });
 
   describe("writeFile", () => {
-    test("调用 POST /api/memories 写入内容", async () => {
+    test("overwrite 语义：先删除旧记录再创建新记录", async () => {
+      const calls: string[] = [];
       let capturedBody: Record<string, unknown> = {};
 
       globalThis.fetch = mock(
-        (_input: RequestInfo | URL, init?: RequestInit): Response => {
-          if (init?.body) capturedBody = JSON.parse(init.body as string);
+        (input: RequestInfo | URL, init?: RequestInit): Response => {
+          const method = init?.method || "GET";
+          const url = input.toString();
+          if (method === "DELETE") {
+            calls.push(`DELETE:${url.split("/").pop()}`);
+            return mockResponse(200, { success: true });
+          }
+          if (method === "POST") {
+            calls.push("POST");
+            if (init?.body) capturedBody = JSON.parse(init.body as string);
+            return mockResponse(200, {
+              success: true,
+              data: { id: "m1", indexed: true },
+            });
+          }
+          // GET list：返回已有的旧记录
+          calls.push("GET");
           return mockResponse(200, {
             success: true,
-            data: { id: "m1", indexed: true },
+            data: [
+              { id: "old-1", title: "x", content: "旧内容", created_at: 1 },
+              { id: "old-2", title: "x", content: "旧内容", created_at: 1 },
+            ],
           });
         },
       ) as unknown as typeof fetch;
@@ -442,6 +461,11 @@ describe("RemoteFileStorageProvider", () => {
         "新记忆内容",
       );
 
+      // 先 GET 列出旧记录 → 逐条 DELETE → 最后 POST 创建
+      expect(calls.filter((c) => c.startsWith("GET")).length).toBeGreaterThan(0);
+      expect(calls).toContain("DELETE:old-1");
+      expect(calls).toContain("DELETE:old-2");
+      expect(calls[calls.length - 1]).toBe("POST");
       expect(capturedBody.type).toBe("knowledge");
       expect(capturedBody.content).toBe("新记忆内容");
       expect(capturedBody.scope).toBe("project");
@@ -450,14 +474,42 @@ describe("RemoteFileStorageProvider", () => {
   });
 
   describe("appendFile", () => {
-    test("等同于 writeFile 调用 POST /api/dailies", async () => {
+    test("append 语义：只新增，不先删除旧记录", async () => {
+      const calls: string[] = [];
+      let capturedText = "";
+
+      globalThis.fetch = mock(
+        (input: RequestInfo | URL, init?: RequestInit): Response => {
+          const method = init?.method || "GET";
+          if (method === "POST") {
+            calls.push("POST");
+            if (init?.body)
+              capturedText = JSON.parse(init.body as string).content;
+            return mockResponse(200, { success: true, data: { id: "m1" } });
+          }
+          calls.push(method);
+          return mockResponse(200, { success: true, data: [] });
+        },
+      ) as unknown as typeof fetch;
+
+      await provider.appendFile("daily:::2026-07-22", "今日日志");
+
+      // 只应有创建请求，绝无 list/delete
+      expect(calls).toEqual(["POST"]);
+      expect(capturedText).toBe("今日日志");
+    });
+
+    test("append daily 调用 POST /api/dailies", async () => {
       let capturedText = "";
 
       globalThis.fetch = mock(
         (_input: RequestInfo | URL, init?: RequestInit): Response => {
           if (init?.body)
             capturedText = JSON.parse(init.body as string).content;
-          return mockResponse(200, { success: true, data: { id: "m1" } });
+          return mockResponse(200, {
+            success: true,
+            data: { id: "m1", indexed: true },
+          });
         },
       ) as unknown as typeof fetch;
 
@@ -689,6 +741,57 @@ describe("RemoteFileStorageProvider", () => {
     test("返回空数组（remote 下列文件功能由 Worker API 提供）", async () => {
       const files = await provider.listFiles("*.md");
       expect(files).toEqual([]);
+    });
+  });
+
+  describe("listAll", () => {
+    test("枚举根文件与按日聚合的 daily 文件", async () => {
+      globalThis.fetch = mock(
+        (input: RequestInfo | URL): Response => {
+          const url = input.toString();
+          if (url.includes("/api/instructions")) {
+            return mockResponse(200, {
+              success: true,
+              data: [{ id: "i1", content: "身份", created_at: 1710000000000 }],
+            });
+          }
+          if (url.includes("/api/learnings")) {
+            const type = new URL(url).searchParams.get("type");
+            const all = [
+              { id: "p1", content: "偏好", created_at: 1710000001000 },
+              { id: "k1", content: "知识", created_at: 1710000002000 },
+              { id: "k2", content: "知识2", created_at: 1710000003000 },
+            ];
+            return mockResponse(200, {
+              success: true,
+              data: all.filter((r) => r.id.startsWith((type || "k").charAt(0))),
+            });
+          }
+          if (url.includes("/api/dailies")) {
+            return mockResponse(200, {
+              success: true,
+              data: [
+                { id: "d1", content: "1", date: "2026-07-01", created_at: 1710000004000 },
+                { id: "d2", content: "2", date: "2026-08-05", created_at: 1710000005000 },
+              ],
+            });
+          }
+          return mockResponse(200, { success: true, data: [] });
+        },
+      ) as unknown as typeof fetch;
+
+      const result = await provider.listAll();
+
+      expect(result.root.map((f) => f.name)).toEqual([
+        "IDENTITY.md",
+        "USER.md",
+        "MEMORY.md",
+      ]);
+      expect(result.daily.map((f) => f.name)).toEqual([
+        "daily/2026-08-05.md",
+        "daily/2026-07-01.md",
+      ]);
+      expect(result.root.find((f) => f.name === "MEMORY.md")!.timestamps).toHaveLength(2);
     });
   });
 

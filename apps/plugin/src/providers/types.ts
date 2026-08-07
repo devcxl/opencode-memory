@@ -62,4 +62,9 @@ export interface IFileStorageProvider {
   deleteByTimestamp?(path: string, timestamp: string): Promise<string>;
   exists(path: string): Promise<boolean>;
   listFiles(pattern: string): Promise<string[]>;
+  /** 枚举逻辑文件及时间戳（remote 模式 list 用）。root=根文件，daily=按日期命名的日志 */
+  listAll?(): Promise<{
+    root: Array<{ name: string; timestamps: string[] }>;
+    daily: Array<{ name: string; timestamps: string[] }>;
+  }>;
 }

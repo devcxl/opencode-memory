@@ -1,8 +1,21 @@
 import type { Env, KeywordSearchResult } from '../types'
 import type { runAIWithTimeout } from '../utils/ai'
+import { preprocessQuery, buildFtsMatchExpression } from './tokenizer'
 
-const SOURCE_TABLES = ['instructions', 'learnings', 'dailies'] as const
+const SOURCE_TABLES = ['instructions', 'learnings', 'dailies', 'memories'] as const
 type SourceTable = (typeof SOURCE_TABLES)[number]
+
+/** 各表的 FTS 虚拟表配置（表结构不一致，需分别指定 id 列与 snippet 列） */
+const FTS_TABLES: Array<{
+  sourceTable: SourceTable
+  ftsTable: string
+  idExpr: string
+  snippetCol: number
+}> = [
+  { sourceTable: 'learnings', ftsTable: 'learnings_fts', idExpr: 'id', snippetCol: 0 },
+  { sourceTable: 'dailies', ftsTable: 'dailies_fts', idExpr: 'id', snippetCol: 0 },
+  { sourceTable: 'memories', ftsTable: 'memories_fts', idExpr: 'memory_id', snippetCol: 3 },
+]
 
 interface VectorMatch {
   id: string
@@ -16,6 +29,7 @@ interface HydratedRecord {
   id: string
   text: string
   created_at: number
+  kind?: 'short' | 'long'
   source_table: SourceTable
   snippet?: string
   matchCount?: number
@@ -26,9 +40,8 @@ interface HydratedRecord {
 
 /**
  * 按 source_table 分组批量查询完整记录。
- * instructions → 取 content 字段
- * learnings   → 取 content 字段
- * dailies     → 取 content 字段
+ * instructions/learnings/dailies → content 字段，kind 固定为 long；
+ * memories → text 字段，保留真实 kind。
  */
 async function fetchRecordsByIds(
   env: Env,
@@ -53,16 +66,24 @@ async function fetchRecordsByIds(
       case 'dailies':
         sql = `SELECT id, content AS text, created_at FROM dailies WHERE id IN (${placeholders}) AND archived = 0`
         break
+      case 'memories':
+        sql = `SELECT id, text AS text, created_at, kind FROM memories WHERE id IN (${placeholders}) AND archived = 0`
+        break
     }
 
     const { results } = await env.DB.prepare(sql).bind(...bindings).all<{
       id: string
       text: string
       created_at: number
+      kind?: string
     }>()
 
     for (const row of results || []) {
-      recordMap.set(row.id, { ...row, source_table: table })
+      recordMap.set(row.id, {
+        ...row,
+        kind: (row.kind as 'short' | 'long') || 'long',
+        source_table: table,
+      })
     }
   }
 
@@ -100,12 +121,12 @@ interface CrossTableSearchOptions {
 }
 
 /**
- * 跨表统一搜索入口。
+ * 跨表统一搜索入口（结构化表 + 经典 memories 表）。
  *
  * 1. AI embedding → Vectorize.query（单 namespace，source_table metadata 区分来源）
- * 2. FTS 搜索 learnings + dailies（instructions 不走 FTS）
+ * 2. FTS 关键词搜索 learnings/dailies/memories（instructions 不走 FTS）
  * 3. RRF 融合
- * 4. 批量查询对应表获取完整 record
+ * 4. 按 source_table 批量查询对应表获取完整 record
  */
 export async function crossTableSearch(
   env: Env,
@@ -150,26 +171,33 @@ export async function crossTableSearch(
     vecScores.set(match.id, match.score ?? 0)
   }
 
-  // 3. FTS 搜索（learnings + dailies）
+  // 3. FTS 关键词搜索（learnings + dailies + memories）
   const ftsScores = new Map<string, number>()
-  for (const table of ['learnings', 'dailies'] as const) {
-    try {
-      const ftsResults = await env.DB.prepare(
-        `SELECT id, snippet(${table}_fts, 0, '<b>', '</b>', '...', 40) AS snippet,
-                bm25(${table}_fts) AS score
-         FROM ${table}_fts
-         WHERE ${table}_fts MATCH ? AND user_id = ?
-         ORDER BY score DESC LIMIT ?`,
-      ).bind(query, userId, topK).all<{ id: string; snippet: string; score: number }>()
+  const ftsTableById = new Map<string, SourceTable>()
+  const processed = preprocessQuery(query)
+  const matchExpression = buildFtsMatchExpression(processed.tokens)
 
-      for (const row of ftsResults.results || []) {
-        const existing = ftsScores.get(row.id)
-        if (!existing || row.score > existing) {
-          ftsScores.set(row.id, row.score)
+  if (matchExpression) {
+    for (const { sourceTable, ftsTable, idExpr, snippetCol } of FTS_TABLES) {
+      try {
+        const ftsResults = await env.DB.prepare(
+          `SELECT ${idExpr} AS id, snippet(${ftsTable}, ${snippetCol}, '<b>', '</b>', '...', 40) AS snippet,
+                  bm25(${ftsTable}) AS score
+           FROM ${ftsTable}
+           WHERE ${ftsTable} MATCH ? AND user_id = ?
+           ORDER BY score DESC LIMIT ?`,
+        ).bind(matchExpression, userId, topK).all<{ id: string; snippet: string; score: number }>()
+
+        for (const row of ftsResults.results || []) {
+          const existing = ftsScores.get(row.id)
+          if (!existing || row.score > existing) {
+            ftsScores.set(row.id, row.score)
+            ftsTableById.set(row.id, sourceTable)
+          }
         }
+      } catch {
+        // FTS 表可能未创建或查询失败，跳过
       }
-    } catch {
-      // FTS 表可能未创建或查询失败，跳过
     }
   }
 
@@ -191,18 +219,19 @@ export async function crossTableSearch(
 
   const finalScores = rrf(fusionInput)
 
-  // 5. 收集所有需要查询的 ID
+  // 5. 收集所有需要查询的 ID（按真实来源表分组）
   const allIdsByTable = new Map<SourceTable, string[]>()
+  const push = (table: SourceTable, id: string) => {
+    if (!allIdsByTable.has(table)) allIdsByTable.set(table, [])
+    if (!allIdsByTable.get(table)!.includes(id)) allIdsByTable.get(table)!.push(id)
+  }
+
   for (const [table, ids] of idsByTable.entries()) {
-    allIdsByTable.set(table, ids)
+    for (const id of ids) push(table, id)
   }
   for (const [id] of ftsScores.entries()) {
     if (!vecScores.has(id)) {
-      // FTS-only results → need to figure out which table (default learning)
-      if (!allIdsByTable.has('learnings')) allIdsByTable.set('learnings', [])
-      if (!allIdsByTable.get('learnings')!.includes(id)) {
-        allIdsByTable.get('learnings')!.push(id)
-      }
+      push(ftsTableById.get(id) || 'learnings', id)
     }
   }
 
@@ -228,7 +257,7 @@ export async function crossTableSearch(
   return results.slice(0, topK).map((r) => ({
     id: r.id,
     user_id: userId,
-    kind: kind || 'long',
+    kind: r.kind || kind || 'long',
     text: r.text,
     tags: '[]',
     created_at: r.created_at,

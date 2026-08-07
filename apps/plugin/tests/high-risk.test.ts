@@ -1350,3 +1350,48 @@ test("detectProject with HTTPS without .git suffix", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("remote mode appendFile writes single record, not accumulated content", async () => {
+  await withTempMemory(async (memoryDir) => {
+    const writes: string[] = [];
+    const fileStorage = {
+      // 模拟 remote 存储语义：readFile 返回该 path 已存在的全部记录
+      readFile: async () => writes.join("\n\n") || null,
+      writeFile: async (_path: string, content: string) => {
+        writes.push(content);
+      },
+      appendFile: async (_path: string, content: string) => {
+        writes.push(content);
+      },
+      deleteFile: async () => {},
+    };
+    const manager = new MemoryManager(
+      { memoryDir, mode: "remote" },
+      {
+        vectorIndex: {
+          upsert: async () => {},
+          search: async () => [],
+          delete: async () => {},
+        },
+        embedding: {
+          embedTexts: async () => [],
+          dimensions: 384,
+          modelId: "mock",
+        },
+        fileStorage,
+      },
+    );
+    await manager.ensureDirectories();
+
+    const dailyPath = manager.getDailyPath("2026-08-07");
+    await manager.appendFile(dailyPath, "第一次记录");
+    await manager.appendFile(dailyPath, "第二次记录");
+
+    expect(writes).toHaveLength(2);
+    // 每条都只包含自身内容，绝不累积上一次的内容
+    expect(writes[0]).not.toContain("第二次记录");
+    expect(writes[0]).toContain("第一次记录");
+    expect(writes[1]).not.toContain("第一次记录");
+    expect(writes[1]).toContain("第二次记录");
+  });
+});

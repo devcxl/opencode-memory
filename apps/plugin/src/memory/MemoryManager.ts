@@ -386,10 +386,24 @@ export class MemoryManager {
    * 用于 daily log 等持续追加的场景，并保持向量索引与 git 提交一致
    */
   async appendFile(filePath: string, content: string): Promise<void> {
-    const existing = await this.providers.fileStorage.readFile(filePath);
-    const separator = existing?.trim() ? "\n\n" : "";
     const timestamp = this.getLocalTimestamp();
     const stamped = `<!-- ${timestamp} -->\n${content}`;
+
+    // remote 模式：记录独立存储，一次追加即一条新记录，不读回拼接
+    if (this.mode === "remote") {
+      checkLineLimit(filePath, content);
+      await this.persistAndIndex(
+        filePath,
+        stamped,
+        `Append to ${path.basename(filePath)}`,
+        true,
+      );
+      return;
+    }
+
+    // local 模式：读回现有内容后整体重写
+    const existing = await this.providers.fileStorage.readFile(filePath);
+    const separator = existing?.trim() ? "\n\n" : "";
     const newContent = (existing ?? "") + separator + stamped;
 
     checkLineLimit(filePath, newContent);
@@ -510,7 +524,14 @@ export class MemoryManager {
     filePath: string,
     content: string,
     operation: string,
+    append = false,
   ): Promise<void> {
+    // remote append：只新增一条记录；overwrite/edit 走 writeFile（远程 provider 内部先删后建）
+    if (append && this.mode === "remote") {
+      await this.providers.fileStorage.appendFile(filePath, content);
+      return;
+    }
+
     await this.providers.fileStorage.writeFile(filePath, content);
 
     // local 模式：本地 embed + index + git commit

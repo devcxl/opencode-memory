@@ -1,5 +1,5 @@
 import type { Env, Learning, LearningType, MemoryScope, LearningSource } from '../types'
-import { upsertMemoryVector, type IndexableMemory } from '../search/indexing'
+import { deleteMemoryIndex, upsertMemoryVector, type IndexableMemory } from '../search/indexing'
 import { segmentForIndex } from '../search/tokenizer'
 import { runAIWithTimeout } from '../utils/ai'
 import { withRetry } from '../utils/retry'
@@ -135,6 +135,7 @@ export async function deleteLearning(
     'UPDATE learnings SET archived = 1, updated_at = ? WHERE id = ? AND user_id = ?',
   ).bind(Date.now(), id, userId).run()
 
+  await deleteMemoryIndex(env, id)
   await upsertProjectStats(env, userId, learning.project_id, 'learning', -1)
 }
 

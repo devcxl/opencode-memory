@@ -1,5 +1,5 @@
 import type { Env, Daily } from '../types'
-import { upsertMemoryVector, type IndexableMemory } from '../search/indexing'
+import { deleteMemoryIndex, upsertMemoryVector, type IndexableMemory } from '../search/indexing'
 import { segmentForIndex } from '../search/tokenizer'
 import { runAIWithTimeout } from '../utils/ai'
 import { withRetry } from '../utils/retry'
@@ -111,6 +111,7 @@ export async function deleteDaily(
     'UPDATE dailies SET archived = 1 WHERE id = ? AND user_id = ?',
   ).bind(id, userId).run()
 
+  await deleteMemoryIndex(env, id)
   await upsertProjectStats(env, userId, daily.project_id, 'daily', -1)
 }
 

@@ -1,5 +1,4 @@
 import { deleteMemoryIndex, replaceMemoryIndex, upsertMemoryVector, type IndexableMemory } from '../search/indexing'
-import { hybridSearch } from '../search/hybrid'
 import { crossTableSearch } from '../search/cross-table'
 import { segmentForIndex } from '../search/tokenizer'
 import { runAIWithTimeout } from '../utils/ai'

@@ -61,9 +61,12 @@ app.use('*', cors({
 
     // 取请求头 Origin，判断是否在 allowlist 内
     const requestOrigin = c.req.header('Origin') || c.req.header('origin')
-    const isAllowed = allowedOrigins.includes(requestOrigin || '')
+    // 支持 "*" 通配符（放行任意来源）；有 Origin 且被允许时回显该 Origin
+    const allowAll = allowedOrigins.includes('*')
+    const isAllowed = allowAll || allowedOrigins.includes(requestOrigin || '')
 
-    return isAllowed ? requestOrigin : (allowedOrigins[0] || '*')
+    if (requestOrigin && isAllowed) return requestOrigin
+    return allowedOrigins[0] || '*'
   },
   allowHeaders: ['Authorization', 'Content-Type'],
   allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
