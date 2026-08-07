@@ -16,11 +16,12 @@ const statCards = [
 
 export function Overview({ stats, isLoading }: OverviewProps) {
   const { data: learnings } = useQuery({
-    queryKey: ['learnings'],
+    // 与 Memories 页的 ['learnings'] 区分，避免 limit=5 的缓存污染完整列表
+    queryKey: ['learnings', 'overview'],
     queryFn: () => memoryApi.listLearnings(5).then(r => r.data.data || []),
   })
   const { data: dailies } = useQuery({
-    queryKey: ['dailies'],
+    queryKey: ['dailies', 'overview'],
     queryFn: () => memoryApi.listDailies(5).then(r => r.data.data || []),
   })
 

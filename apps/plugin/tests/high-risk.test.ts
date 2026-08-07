@@ -1471,3 +1471,70 @@ test("checkLineLimit does not throw within limit", async () => {
   const { checkLineLimit } = await import("../src/utils/validation.js");
   expect(() => checkLineLimit("MEMORY.md", "a\nb\nc")).not.toThrow();
 });
+
+// =============================================================================
+// remote semanticSearch：全局 + 项目结果按 id 去重
+// =============================================================================
+
+test("remote semanticSearch dedupes global and project results by id", async () => {
+  const { RemoteFileStorageProvider } = await import(
+    "../src/providers/remote/FileStorageProvider.js"
+  );
+  const { FileSearcher: FileSearcherCls } = await import(
+    "../src/memory/FileSearcher.js"
+  );
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (
+    _input: RequestInfo | URL,
+    init?: RequestInit,
+  ): Promise<Response> => {
+    const body = JSON.parse((init?.body as string) || "{}");
+    const isProjectSearch = Boolean(body.project_id);
+    const record = {
+      id: "r1",
+      text: "项目记忆",
+      score: isProjectSearch ? 0.95 : 0.7,
+      created_at: 1000,
+      snippet: "...",
+      matchCount: 1,
+    };
+    return new Response(
+      JSON.stringify({
+        success: true,
+        data: isProjectSearch ? [record] : [record],
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+  }) as typeof fetch;
+
+  try {
+    const memoryDir = "/tmp/opencode-memory-remote-test";
+    const dailyDir = "/tmp/opencode-memory-remote-test/daily";
+    const fileStorage = new RemoteFileStorageProvider({
+      apiUrl: "https://memory.example.com",
+      apiKey: "test-key",
+    });
+    const searcher = new FileSearcherCls(
+      memoryDir,
+      dailyDir,
+      fileStorage,
+      (() => ({})) as never,
+      "remote",
+    );
+
+    const results = await searcher.semanticSearch(
+      "查询",
+      20,
+      undefined,
+      "owner/repo",
+      "all",
+    );
+
+    // 同一条记录同时被全局搜索和项目搜索召回，去重后只剩一条（取高分 0.95）
+    expect(results).toHaveLength(1);
+    expect(results[0].score).toBe(0.95);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

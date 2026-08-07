@@ -30,6 +30,8 @@ interface HydratedRecord {
   text: string
   created_at: number
   kind?: 'short' | 'long'
+  tags?: string
+  project_id?: string
   source_table: SourceTable
   snippet?: string
   matchCount?: number
@@ -58,16 +60,16 @@ async function fetchRecordsByIds(
     let sql = ''
     switch (table) {
       case 'instructions':
-        sql = `SELECT id, content AS text, created_at FROM instructions WHERE id IN (${placeholders}) AND archived = 0`
+        sql = `SELECT id, content AS text, created_at, tags, project_id FROM instructions WHERE id IN (${placeholders}) AND archived = 0`
         break
       case 'learnings':
-        sql = `SELECT id, content AS text, created_at FROM learnings WHERE id IN (${placeholders}) AND archived = 0`
+        sql = `SELECT id, content AS text, created_at, tags, project_id FROM learnings WHERE id IN (${placeholders}) AND archived = 0`
         break
       case 'dailies':
-        sql = `SELECT id, content AS text, created_at FROM dailies WHERE id IN (${placeholders}) AND archived = 0`
+        sql = `SELECT id, content AS text, created_at, tags, project_id FROM dailies WHERE id IN (${placeholders}) AND archived = 0`
         break
       case 'memories':
-        sql = `SELECT id, text AS text, created_at, kind FROM memories WHERE id IN (${placeholders}) AND archived = 0`
+        sql = `SELECT id, text AS text, created_at, kind, tags, project_id FROM memories WHERE id IN (${placeholders}) AND archived = 0`
         break
     }
 
@@ -76,6 +78,8 @@ async function fetchRecordsByIds(
       text: string
       created_at: number
       kind?: string
+      tags?: string
+      project_id?: string
     }>()
 
     for (const row of results || []) {
@@ -149,6 +153,7 @@ export async function crossTableSearch(
   const vecFilter: Record<string, string> = { user_id: userId }
   if (file_type) vecFilter.file_type = file_type
   if (project_id) vecFilter.project_id = project_id
+  if (kind) vecFilter.kind = kind
 
   const vecResults = await env.VEC.query(embedding.data[0], {
     topK: Math.max(topK * 3, topK),
@@ -174,25 +179,35 @@ export async function crossTableSearch(
   // 3. FTS 关键词搜索（learnings + dailies + memories）
   const ftsScores = new Map<string, number>()
   const ftsTableById = new Map<string, SourceTable>()
+  const ftsSnippets = new Map<string, string>()
   const processed = preprocessQuery(query)
   const matchExpression = buildFtsMatchExpression(processed.tokens)
 
   if (matchExpression) {
     for (const { sourceTable, ftsTable, idExpr, snippetCol } of FTS_TABLES) {
+      // 结构化表只有 long 记录：kind=short 时跳过（memories 表才有 short）
+      if (kind && kind !== 'long' && sourceTable !== 'memories') continue
       try {
-        const ftsResults = await env.DB.prepare(
-          `SELECT ${idExpr} AS id, snippet(${ftsTable}, ${snippetCol}, '<b>', '</b>', '...', 40) AS snippet,
+        const bindings: Array<string | number> = [matchExpression, userId]
+        let sql = `SELECT ${idExpr} AS id, snippet(${ftsTable}, ${snippetCol}, '<b>', '</b>', '...', 40) AS snippet,
                   bm25(${ftsTable}) AS score
            FROM ${ftsTable}
-           WHERE ${ftsTable} MATCH ? AND user_id = ?
-           ORDER BY score DESC LIMIT ?`,
-        ).bind(matchExpression, userId, topK).all<{ id: string; snippet: string; score: number }>()
+           WHERE ${ftsTable} MATCH ? AND user_id = ?`
+        if (kind && sourceTable === 'memories') {
+          sql += ' AND kind = ?'
+          bindings.push(kind)
+        }
+        sql += ' ORDER BY score DESC LIMIT ?'
+        bindings.push(topK)
+
+        const ftsResults = await env.DB.prepare(sql).bind(...bindings).all<{ id: string; snippet: string; score: number }>()
 
         for (const row of ftsResults.results || []) {
           const existing = ftsScores.get(row.id)
           if (!existing || row.score > existing) {
             ftsScores.set(row.id, row.score)
             ftsTableById.set(row.id, sourceTable)
+            if (row.snippet) ftsSnippets.set(row.id, row.snippet)
           }
         }
       } catch {
@@ -259,13 +274,13 @@ export async function crossTableSearch(
     user_id: userId,
     kind: r.kind || kind || 'long',
     text: r.text,
-    tags: '[]',
+    tags: r.tags ?? '[]',
     created_at: r.created_at,
     archived: 0,
-    project_id: '',
+    project_id: r.project_id ?? '',
     file_type: r.source_table,
     score: r.score,
-    snippet: '',
-    matchCount: 0,
+    snippet: r.snippet ?? ftsSnippets.get(r.id) ?? '',
+    matchCount: r.matchCount ?? (ftsScores.has(r.id) ? processed.tokens.length : 0),
   }))
 }

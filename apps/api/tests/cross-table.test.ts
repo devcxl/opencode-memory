@@ -209,3 +209,126 @@ test('FTS-only daily 命中按真实来源表路由到 dailies（不再误入 le
   assert.equal(results[0].text, dailyRecord.text)
   assert.equal(results[0].file_type, 'dailies')
 })
+
+// ─── kind 过滤 ──────────────────────────────────────────────
+
+test('crossTableSearch 传 kind 时向量过滤并跳过结构化表 FTS', async () => {
+  const ftsSql: string[] = []
+  let vecFilter: Record<string, string> | undefined
+
+  const db = {
+    prepare(sql: string) {
+      return {
+        bind(..._args: unknown[]) {
+          return {
+            async all<T>() {
+              if (sql.includes('_fts')) {
+                ftsSql.push(sql)
+                return { results: [] as T[] }
+              }
+              return { results: [] as T[] }
+            },
+          }
+        },
+      }
+    },
+  }
+
+  const vec = {
+    async query(_vector: number[], options: { filter?: Record<string, string> }) {
+      vecFilter = options.filter
+      return { matches: [] }
+    },
+    async upsert() {}, async describe() { return {} }, async insert() {},
+    async deleteByIds() {}, async getByIds() { return { results: [] } },
+  }
+
+  const env = {
+    DB: db as Env['DB'],
+    VEC: vec as unknown as Env['VEC'],
+    AI: { async run() { return {} } },
+    JWT_SECRET: 's',
+  }
+
+  const runAIWithTimeout = async <T,>(_ai: Env['AI']): Promise<T> => {
+    return { data: [[0.1]] } as T
+  }
+
+  await crossTableSearch(env, runAIWithTimeout, {
+    query: 'short query',
+    userId: 'user-1',
+    kind: 'short',
+    topK: 5,
+  })
+
+  // 向量过滤必须带 kind
+  assert.equal(vecFilter?.kind, 'short')
+  // memories_fts 带 kind 条件，learnings/dailies FTS 跳过
+  assert.ok(ftsSql.some((sql) => sql.includes('memories_fts') && sql.includes('AND kind = ?')))
+  assert.ok(!ftsSql.some((sql) => sql.includes('learnings_fts')))
+  assert.ok(!ftsSql.some((sql) => sql.includes('dailies_fts')))
+})
+
+// ─── 元数据保留 ─────────────────────────────────────────────
+
+test('crossTableSearch 保留 tags/project_id 元数据', async () => {
+  const learningRecord = {
+    id: 'learn-1',
+    text: '使用 pnpm workspace 管理 monorepo',
+    created_at: 1_777_000_000_000,
+    kind: 'long',
+    tags: '["架构"]',
+    project_id: 'owner/repo',
+  }
+
+  const db = {
+    prepare(sql: string) {
+      return {
+        bind(..._args: unknown[]) {
+          return {
+            async all<T>() {
+              if (sql.includes('_fts')) return { results: [] as T[] }
+              if (sql.includes('FROM learnings WHERE id IN')) {
+                return { results: [learningRecord] as T[] }
+              }
+              return { results: [] as T[] }
+            },
+          }
+        },
+      }
+    },
+  }
+
+  const vec = {
+    async query() {
+      return {
+        matches: [
+          { id: learningRecord.id, score: 0.88, metadata: { source_table: 'learnings' } },
+        ],
+      }
+    },
+    async upsert() {}, async describe() { return {} }, async insert() {},
+    async deleteByIds() {}, async getByIds() { return { results: [] } },
+  }
+
+  const env = {
+    DB: db as Env['DB'],
+    VEC: vec as unknown as Env['VEC'],
+    AI: { async run() { return {} } },
+    JWT_SECRET: 's',
+  }
+
+  const runAIWithTimeout = async <T,>(_ai: Env['AI']): Promise<T> => {
+    return { data: [[0.1]] } as T
+  }
+
+  const results = await crossTableSearch(env, runAIWithTimeout, {
+    query: 'monorepo',
+    userId: 'user-1',
+    topK: 5,
+  })
+
+  assert.equal(results.length, 1)
+  assert.equal(results[0].tags, '["架构"]')
+  assert.equal(results[0].project_id, 'owner/repo')
+})

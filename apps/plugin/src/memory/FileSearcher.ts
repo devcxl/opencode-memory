@@ -111,7 +111,15 @@ export class FileSearcher {
               )
             : [];
 
-        const allResults = [...globalResults, ...projectResults];
+        // 全局搜索会召回项目记录，与项目搜索结果按 id 去重，保留分数更高的那条
+        const byId = new Map<string, (typeof globalResults)[number]>();
+        for (const r of [...globalResults, ...projectResults]) {
+          const existing = byId.get(r.id);
+          if (!existing || r.score > existing.score) {
+            byId.set(r.id, r);
+          }
+        }
+        const allResults = [...byId.values()];
         allResults.sort((a, b) => b.score - a.score);
 
         const filtered = period
