@@ -1440,3 +1440,34 @@ test("remote mode handleWrite does not return local Timestamp", async () => {
     expect(result).toContain("read/list");
   });
 });
+
+// =============================================================================
+// checkLineLimit：local 文件名与 remote 冒号路径均生效
+// =============================================================================
+
+test("checkLineLimit throws for local MEMORY.md over limit", async () => {
+  const { checkLineLimit } = await import("../src/utils/validation.js");
+  const overLimit = Array.from({ length: 1001 }, () => "x").join("\n");
+  expect(() => checkLineLimit("/tmp/memory/MEMORY.md", overLimit)).toThrow(
+    /line limit/,
+  );
+});
+
+test("checkLineLimit throws for remote learning:knowledge path over limit", async () => {
+  const { checkLineLimit } = await import("../src/utils/validation.js");
+  const overLimit = Array.from({ length: 1001 }, () => "x").join("\n");
+  expect(() =>
+    checkLineLimit("learning:knowledge:global::", overLimit),
+  ).toThrow(/line limit/);
+});
+
+test("checkLineLimit does not throw for remote daily path over limit", async () => {
+  const { checkLineLimit } = await import("../src/utils/validation.js");
+  const overLimit = Array.from({ length: 1001 }, () => "x").join("\n");
+  expect(() => checkLineLimit("daily::global::2026-08-07", overLimit)).not.toThrow();
+});
+
+test("checkLineLimit does not throw within limit", async () => {
+  const { checkLineLimit } = await import("../src/utils/validation.js");
+  expect(() => checkLineLimit("MEMORY.md", "a\nb\nc")).not.toThrow();
+});

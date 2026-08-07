@@ -66,7 +66,11 @@ export function normalizeDailyDate(date?: string): string | undefined {
 /** 仅对 MEMORY.md 做行数上限检查，避免历史累积导致性能问题 */
 export function checkLineLimit(filePath: string, content: string): void {
   const fileName = filePath.split("/").pop();
-  if (fileName === "MEMORY.md") {
+  // remote 模式路径为冒号分隔（category:sub_type:scope:project:date），
+  // MEMORY.md 映射为 learning:knowledge 开头
+  const isMemoryFile =
+    fileName === "MEMORY.md" || filePath.startsWith("learning:knowledge:");
+  if (isMemoryFile) {
     const lines = content.split("\n").length;
     if (lines > MAX_MEMORY_LINES) {
       throw new Error(
