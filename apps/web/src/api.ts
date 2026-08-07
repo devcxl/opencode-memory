@@ -1,5 +1,13 @@
 import axios from 'axios'
-import type { AskResponse, Memory, ApiResponse, Stats } from './types'
+import type {
+  AskResponse,
+  Memory,
+  ApiResponse,
+  Stats,
+  Instruction,
+  Learning,
+  Daily,
+} from './types'
 
 const isLocalViteDev =
   typeof window !== 'undefined' &&
@@ -43,4 +51,22 @@ export const memoryApi = {
 
   stats: () =>
     api.get<ApiResponse<Stats>>('/api/stats'),
+
+  /** 结构化记忆：指令 */
+  listInstructions: (limit = 50, offset = 0) =>
+    api.get<ApiResponse<Instruction[]>>('/api/instructions', { params: { limit, offset } }),
+  deleteInstruction: (id: string) =>
+    api.delete<ApiResponse<void>>(`/api/instructions/${id}`),
+
+  /** 结构化记忆：学习 */
+  listLearnings: (limit = 50, offset = 0) =>
+    api.get<ApiResponse<Learning[]>>('/api/learnings', { params: { limit, offset } }),
+  deleteLearning: (id: string) =>
+    api.delete<ApiResponse<void>>(`/api/learnings/${id}`),
+
+  /** 结构化记忆：每日日志 */
+  listDailies: (limit = 50, offset = 0) =>
+    api.get<ApiResponse<Daily[]>>('/api/dailies', { params: { limit, offset } }),
+  deleteDaily: (id: string) =>
+    api.delete<ApiResponse<void>>(`/api/dailies/${id}`),
 }

@@ -43,4 +43,10 @@ export interface Stats {
   shortCount: number
   /** 长期记忆数量 */
   longCount: number
+  /** 结构化记忆：指令数量 */
+  instructionCount: number
+  /** 结构化记忆：学习数量 */
+  learningCount: number
+  /** 结构化记忆：每日日志数量 */
+  dailyCount: number
 }
