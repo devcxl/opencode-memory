@@ -550,7 +550,9 @@ describe("RemoteFileStorageProvider", () => {
       expect(result).not.toBeNull();
       expect(result).toContain("条目1内容");
       expect(result).toContain("条目2内容");
-      expect(result).toContain("<!--");
+      // remote 内容不展示时间戳，也不拼接类型占位 title
+      expect(result).not.toContain("<!--");
+      expect(result).not.toContain("## 条目1");
     });
 
     test("无结果时返回 null", async () => {

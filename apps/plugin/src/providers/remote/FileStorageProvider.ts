@@ -44,51 +44,32 @@ export class RemoteFileStorageProvider implements IFileStorageProvider {
         const records = await this.client.listInstructions({
           type: sub_type || undefined,
           project_id: project_id || undefined,
+          limit: 1000,
         });
         if (!records || records.length === 0) return null;
-        return records
-          .map((r) => {
-            const ts = new Date(r.created_at)
-              .toISOString()
-              .replace("T", " ")
-              .slice(0, 19);
-            return `<!-- ${ts} -->\n${r.content}`;
-          })
-          .join("\n\n");
+        // remote 记录独立存储，时间由服务端 created_at 决定，内容里不展示时间戳
+        return records.map((r) => r.content).join("\n\n");
       }
 
       case "learning": {
         const records = await this.client.listLearnings({
           type: sub_type || undefined,
           project_id: project_id || undefined,
+          limit: 1000,
         });
         if (!records || records.length === 0) return null;
-        return records
-          .map((r) => {
-            const ts = new Date(r.created_at)
-              .toISOString()
-              .replace("T", " ")
-              .slice(0, 19);
-            return `<!-- ${ts} -->\n## ${r.title}\n${r.content}`;
-          })
-          .join("\n\n");
+        // title 为创建时的类型占位（如 knowledge），内容里已有用户标题，不再重复拼接
+        return records.map((r) => r.content).join("\n\n");
       }
 
       case "daily": {
         const records = await this.client.listDailies({
           project_id: project_id || undefined,
           date: date || undefined,
+          limit: 1000,
         });
         if (!records || records.length === 0) return null;
-        return records
-          .map((r) => {
-            const ts = new Date(r.created_at)
-              .toISOString()
-              .replace("T", " ")
-              .slice(0, 19);
-            return `<!-- ${ts} -->\n${r.content}`;
-          })
-          .join("\n\n");
+        return records.map((r) => r.content).join("\n\n");
       }
 
       default:
@@ -161,6 +142,7 @@ export class RemoteFileStorageProvider implements IFileStorageProvider {
           type: sub_type || undefined,
           scope: scope || undefined,
           project_id: project_id || undefined,
+          limit: 1000,
         });
         for (const r of instructions) {
           await this.client.deleteInstruction(r.id);
@@ -172,6 +154,7 @@ export class RemoteFileStorageProvider implements IFileStorageProvider {
           type: sub_type || undefined,
           scope: scope || undefined,
           project_id: project_id || undefined,
+          limit: 1000,
         });
         for (const r of learnings) {
           await this.client.deleteLearning(r.id);
@@ -182,6 +165,7 @@ export class RemoteFileStorageProvider implements IFileStorageProvider {
         const dailies = await this.client.listDailies({
           project_id: project_id || undefined,
           date: date || undefined,
+          limit: 1000,
         });
         for (const r of dailies) {
           await this.client.deleteDaily(r.id);
@@ -204,6 +188,7 @@ export class RemoteFileStorageProvider implements IFileStorageProvider {
         const instructions = await this.client.listInstructions({
           type: sub_type || undefined,
           project_id: project_id || undefined,
+          limit: 1000,
         });
         const target = instructions.find(
           (r) => this.formatTs(r.created_at) === timestamp,
@@ -217,6 +202,7 @@ export class RemoteFileStorageProvider implements IFileStorageProvider {
         const learnings = await this.client.listLearnings({
           type: sub_type || undefined,
           project_id: project_id || undefined,
+          limit: 1000,
         });
         const target = learnings.find(
           (r) => this.formatTs(r.created_at) === timestamp,
@@ -230,6 +216,7 @@ export class RemoteFileStorageProvider implements IFileStorageProvider {
         const dailies = await this.client.listDailies({
           project_id: project_id || undefined,
           date: date || undefined,
+          limit: 1000,
         });
         const target = dailies.find(
           (r) => this.formatTs(r.created_at) === timestamp,
