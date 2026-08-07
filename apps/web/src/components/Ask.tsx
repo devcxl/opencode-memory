@@ -22,7 +22,7 @@ export function Ask() {
   }
 
   return (
-    <div className="space-y-6 max-w-3xl">
+    <div className="space-y-6">
       <div>
         <h2 className="text-xl font-bold text-white">AI 问答</h2>
         <p className="mt-1 text-sm text-neutral-500">基于你的记忆进行问答，回答附带引用来源</p>
