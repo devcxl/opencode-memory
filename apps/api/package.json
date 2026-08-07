@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "wrangler dev --remote",
     "deploy": "wrangler deploy",
-    "db:migrate": "wrangler d1 migrations apply memory-db",
+    "db:migrate": "wrangler d1 migrations apply memory-db --remote",
     "db:create": "wrangler d1 create memory-db",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test tests/**/*.test.ts"
