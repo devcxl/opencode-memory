@@ -20,6 +20,8 @@ export interface RagCitation {
   kind: 'short' | 'long'
   /** 语义相关性评分 */
   score: number
+  /** 来源类型：learning | instruction | daily | memory */
+  source?: 'learning' | 'instruction' | 'daily' | 'memory'
 }
 
 export interface AskResponse {

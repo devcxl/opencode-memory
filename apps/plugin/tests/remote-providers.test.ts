@@ -387,6 +387,7 @@ describe("RemoteFileStorageProvider", () => {
   describe("deleteFile", () => {
     test("先 list 获取 ID 再逐条 delete", async () => {
       const deletedIds: string[] = [];
+      const listUrls: string[] = [];
 
       globalThis.fetch = mock((input: RequestInfo | URL, init?: RequestInit): Response => {
         if (init?.method === "DELETE") {
@@ -394,6 +395,8 @@ describe("RemoteFileStorageProvider", () => {
           deletedIds.push(id);
           return mockResponse(200, { success: true });
         }
+        // list 请求
+        listUrls.push(input.toString());
         return mockResponse(200, {
           success: true,
           data: [
@@ -407,6 +410,28 @@ describe("RemoteFileStorageProvider", () => {
 
       expect(deletedIds).toContain("a1");
       expect(deletedIds).toContain("a2");
+    });
+
+    test("按 path 的 type/project 过滤，避免误删其他记录", async () => {
+      const listUrls: string[] = [];
+
+      globalThis.fetch = mock((input: RequestInfo | URL, init?: RequestInit): Response => {
+        if (init?.method === "DELETE") {
+          return mockResponse(200, { success: true });
+        }
+        listUrls.push(input.toString());
+        return mockResponse(200, {
+          success: true,
+          data: [{ id: "a1", title: "x", content: "x", created_at: 1 }],
+        });
+      }) as unknown as typeof fetch;
+
+      await provider.deleteFile("learning:preference:project:devcxl/LaseAI:2026-07-22");
+
+      expect(listUrls.length).toBe(1);
+      const url = new URL(listUrls[0]);
+      expect(url.searchParams.get("type")).toBe("preference");
+      expect(url.searchParams.get("project_id")).toBe("devcxl/LaseAI");
     });
   });
 

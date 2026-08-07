@@ -79,7 +79,9 @@ export function Ask() {
                   result.citations.map((citation) => (
                     <div key={citation.memoryId} className="rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-3">
                       <div className="flex flex-wrap items-center gap-2 text-xs text-neutral-500">
-                        <span className="px-1.5 py-0.5 rounded-full bg-neutral-800 text-neutral-400">memory</span>
+                        <span className="px-1.5 py-0.5 rounded-full bg-neutral-800 text-neutral-400">
+                          {citation.source || 'memory'}
+                        </span>
                         <span>Score: {(citation.score * 100).toFixed(0)}%</span>
                         <span>{new Date(citation.createdAt).toLocaleString()}</span>
                       </div>

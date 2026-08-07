@@ -140,29 +140,35 @@ export class RemoteFileStorageProvider implements IFileStorageProvider {
   }
 
   async deleteFile(path: string): Promise<void> {
-    const { category } = this.parsePath(path);
+    const { category, sub_type, project_id, date } = this.parsePath(path);
 
-    const records = await this.readFile(path);
-    if (!records) return;
-
-    // Read back and delete individual records
+    // Read back and delete only records matching this path's filters
     switch (category) {
       case "instruction": {
-        const instructions = await this.client.listInstructions({});
+        const instructions = await this.client.listInstructions({
+          type: sub_type || undefined,
+          project_id: project_id || undefined,
+        });
         for (const r of instructions) {
           await this.client.deleteInstruction(r.id);
         }
         break;
       }
       case "learning": {
-        const learnings = await this.client.listLearnings({});
+        const learnings = await this.client.listLearnings({
+          type: sub_type || undefined,
+          project_id: project_id || undefined,
+        });
         for (const r of learnings) {
           await this.client.deleteLearning(r.id);
         }
         break;
       }
       case "daily": {
-        const dailies = await this.client.listDailies({});
+        const dailies = await this.client.listDailies({
+          project_id: project_id || undefined,
+          date: date || undefined,
+        });
         for (const r of dailies) {
           await this.client.deleteDaily(r.id);
         }

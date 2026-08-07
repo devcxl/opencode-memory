@@ -331,6 +331,25 @@ function extractModelText(response: GenerationResponse): string {
   return ''
 }
 
+function mapSource(source?: string): 'learning' | 'instruction' | 'daily' | 'memory' | undefined {
+  switch (source) {
+    case 'learnings':
+    case 'learning':
+      return 'learning'
+    case 'instructions':
+    case 'instruction':
+      return 'instruction'
+    case 'dailies':
+    case 'daily':
+      return 'daily'
+    case 'memories':
+    case 'memory':
+      return 'memory'
+    default:
+      return undefined
+  }
+}
+
 export async function answerQuestion(
   env: Env,
   runAIWithTimeout: <T>(ai: Env['AI'], model: string, input: unknown) => Promise<T>,
@@ -354,7 +373,7 @@ export async function answerQuestion(
     kind: (r.kind || 'long') as 'short' | 'long',
     text: r.text,
     tags: r.tags || '[]',
-    source: undefined,
+    source: r.file_type,
     created_at: r.created_at,
     expires_at: null,
     consolidated_at: null,
@@ -426,6 +445,7 @@ export async function answerQuestion(
       createdAt: m.created_at,
       kind: m.kind,
       score: m.score,
+      source: mapSource(m.source),
     }))
 
   return {
