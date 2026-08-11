@@ -188,6 +188,28 @@ const authMiddleware: MiddlewareHandler<{ Bindings: Env; Variables: Variables }>
 
 app.use('/api/*', authMiddleware)
 
+// 全局错误处理：所有异常统一转为 JSON 响应，携带可读的 error 信息
+app.onError((err, c) => {
+  const requestId = c.get('requestId') as string | undefined
+
+  // HTTPException：保留原始状态码，返回其 message
+  if (err instanceof HTTPException) {
+    const message = err.message || c.req.path
+    console.error(`[${requestId ?? '-'}] HTTP ${err.status} ${c.req.method} ${c.req.path}: ${message}`)
+    return c.json({ success: false, error: message }, err.status)
+  }
+
+  // 未知异常：记录完整堆栈，返回 500 + 错误信息（不暴露堆栈）
+  const message = err instanceof Error ? err.message : 'Unknown error'
+  console.error(`[${requestId ?? '-'}] Unhandled ${c.req.method} ${c.req.path}:`, err)
+  return c.json({ success: false, error: message }, 500)
+})
+
+// 未匹配路由统一 404
+app.notFound((c) => {
+  return c.json({ success: false, error: `Not found: ${c.req.method} ${c.req.path}` }, 404)
+})
+
 app.get('/api/memories', async (c) => {
   const userId = c.get('userId') as string
   const kind = (c.req.query('kind') || 'short') as 'short' | 'long'
