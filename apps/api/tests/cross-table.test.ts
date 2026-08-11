@@ -9,6 +9,8 @@ const dailyRecord = {
   created_at: 1_777_099_454_001,
 }
 
+const vecQueryOptions: Array<Record<string, unknown>> = []
+
 function createEnv(): Env {
   const db = {
     prepare(sql: string) {
@@ -39,6 +41,7 @@ function createEnv(): Env {
     async query(_vector: number[], _options: { returnMetadata?: unknown }) {
       // 模拟 returnMetadata:'all' 生效：返回带 source_table=dailies 的匹配
       assert.equal(_options.returnMetadata, 'all')
+      vecQueryOptions.push({ ..._options })
       return {
         matches: [
           {
@@ -86,6 +89,26 @@ test('crossTableSearch 能按 source_table 召回 dailies', async () => {
   assert.equal(results[0].id, 'daily-1')
   assert.equal(results[0].file_type, 'dailies')
   assert.equal(results[0].text, dailyRecord.text)
+})
+
+test('crossTableSearch 向量查询 topK 不超过 Vectorize 上限 50（returnMetadata=all）', async () => {
+  vecQueryOptions.length = 0
+  const env = createEnv()
+
+  const runAIWithTimeout = async <T,>(_ai: Env['AI']): Promise<T> => {
+    return { data: [[0.1, 0.2, 0.3]] } as T
+  }
+
+  await crossTableSearch(env, runAIWithTimeout, {
+    query: 'some query',
+    userId: 'user-1',
+    topK: 20,
+  })
+
+  assert.equal(vecQueryOptions.length, 1)
+  const topK = vecQueryOptions[0].topK as number
+  assert.ok(topK <= 50, `topK=${topK} 超过 Vectorize 上限 50`)
+  assert.equal(topK, 50)
 })
 
 // ─── 统一检索：纳入 classic memories 表 ──────────────────────

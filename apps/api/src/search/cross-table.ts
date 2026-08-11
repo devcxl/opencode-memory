@@ -155,8 +155,10 @@ export async function crossTableSearch(
   if (project_id) vecFilter.project_id = project_id
   if (kind) vecFilter.kind = kind
 
+  // Vectorize 限制：returnMetadata: 'all' 时 topK 上限 50，超出会抛错
+  const vectorTopK = Math.min(Math.max(topK * 3, topK), 50)
   const vecResults = await env.VEC.query(embedding.data[0], {
-    topK: Math.max(topK * 3, topK),
+    topK: vectorTopK,
     filter: vecFilter,
     returnMetadata: 'all',
   })
