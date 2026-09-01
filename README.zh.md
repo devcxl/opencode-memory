@@ -9,99 +9,127 @@
 
 [English](./README.md) | [中文](./README.zh.md)
 
-基于 Markdown 的 OpenCode 简易记忆插件。
+基于 Cloudflare Workers（D1 + Vectorize）的远程记忆系统，供 OpenCode 插件与 MCP 客户端使用。
 
 </div>
 
-## 安装
+## 架构（v2）
 
-在 `~/.config/opencode/opencode.json` 中添加插件配置：
-
-```json
-{
-  "plugin": ["@devcxl/opencode-memory"]
-}
-```
-
-## 记忆文件
-
-| 文件 | 用途 |
-|------|------|
-| `MEMORY.md` | 长期记忆（关键事实、决策、偏好） |
-| `IDENTITY.md` | AI 身份（名称、人格、行为准则） |
-| `USER.md` | 用户档案（名称、偏好、上下文） |
-| `daily/YYYY-MM-DD.md` | 每日日志（日常活动记录） |
-| `BOOTSTRAP.md` | 首次运行引导说明（引导完成后删除） |
-
-## 存储位置
-
-- **macOS/Linux**: `~/.config/opencode/memory/`
-- **Windows**: `%APPDATA%/opencode/memory/`
-
-## 工具: memory
-
-**操作:**
-
-| 操作 | 描述 | 参数 |
-|--------|-------------|------------|
-| `read` | 读取记忆文件 | `target`: memory, identity, user, daily; `date`, `scope`（可选） |
-| `write` | 写入记忆文件 | `target`, `content`, `mode`: append/overwrite; `date`, `scope`（可选） |
-| `edit` | 编辑文件中的指定内容 | `target`, `oldString`, `newString`; `date`, `scope`（可选） |
-| `delete` | 按时间戳删除条目 | `target`, `timestamp`; `date`, `scope`（可选） |
-| `search` | 语义搜索记忆文件 | `query`, `max_results`, `period`, `scope`（可选） |
-| `list` | 列出记忆文件 | `period`（可选） |
-
-**示例:**
-
-使用 `--scope project` 操作当前项目记忆。projectId 从 git 自动检测；检测失败时降级为全局记忆。
-
-```bash
-memory --action read --target memory
-memory --action write --target memory --content "Remember to use PostgreSQL for all projects"
-memory --action write --target daily --content "Fixed critical bug in auth module"
-memory --action edit --target memory --oldString "Project: Auth Service" --newString "Project: Payment Service"
-memory --action delete --target daily --timestamp "2026-06-06 15:40:23"
-memory --action search --query "PostgreSQL"
-memory --action search --query "bug" --period 2026-06 --scope project
-memory --action list
-memory --action list --period 2026-06
-memory --action write --target memory --scope project --content "Use port 5432"
-```
-
-## 首次运行流程
-
-**重要:** 首次设置必须在 OpenCode **build 模式**（非 plan 模式）下进行。AI 在 plan 模式下无法写入文件。
-
-1. 插件检测到不存在 MEMORY.md
-2. 创建 BOOTSTRAP.md 引导说明文件
-3. AI 读取 BOOTSTRAP.md 并与用户交互提问
-4. AI 将用户回答写入 MEMORY.md、IDENTITY.md、USER.md
-5. AI 删除 BOOTSTRAP.md
-6. 设置完成
-
-随时可通过 `/memory-init` 手动触发引导流程（仅在记忆系统未完全初始化时可用）。
-
-## 上下文注入
-
-MEMORY.md、IDENTITY.md 和 USER.md 会在会话开始时自动注入到 system prompt 中。
-
-每日日志需通过 `memory` 工具访问。
+- **存储**：Cloudflare D1 统一记忆表（`daily` / `fact` / `instruction` / `digest` 四种类型）+ Vectorize 向量索引 + Workers AI（Qwen3 embedding / LLM）
+- **搜索**：混合检索 —— FTS 全命中记录硬性优先（两桶分层），桶内 RRF 融合向量排名；支持分面实体硬过滤
+- **每日总结**：每天北京时间 04:00（UTC 20:00）自动把昨天的 daily 日志总结成一条事实记忆（digest），幂等可补跑
+- **记忆新陈代谢**：fact 写入后由 LLM 异步判定重复/推翻/矛盾，被推翻的旧事实自动退役
+- **认证**：Web 管理台 GitHub OAuth2 登录；插件与 MCP 使用个人中心生成的 API Token（仅存哈希）
+- **接入**：OpenCode 原生插件（含上下文注入）/ MCP Streamable HTTP（`/mcp`，6 个工具）/ REST API
 
 ## 仓库结构
-
-本仓库是 pnpm monorepo。发布到 npm 的插件位于 `apps/plugin`，Cloudflare Workers 后端与 Web 管理后台各为独立子包。
 
 ```
 opencode-memory/
 ├── apps/
-│   ├── api/            # @devcxl/opencode-memory-api     Cloudflare Worker 后端
-│   ├── plugin/         # @devcxl/opencode-memory         发布到 npm 的 OpenCode 插件（即本 README）
-│   └── web/            # @devcxl/opencode-memory-web     Web 管理后台
-├── packages/
-│   └── shared/         # @devcxl/opencode-memory-shared  各包共享类型
-├── scripts/            # 运维脚本
-└── docs/               # 架构文档、ADR 与任务规格
+│   ├── api/            # Cloudflare Worker：REST + MCP + OAuth + cron
+│   ├── plugin/         # @devcxl/opencode-memory  OpenCode 插件（纯远程模式）
+│   ├── pi-extension/   # @devcxl/opencode-memory-pi  pi coding agent 扩展
+│   └── web/            # Web 管理台（React，随 Worker 部署）
+├── packages/shared/    # 共享类型与领域模型
+├── scripts/            # 迁移与运维脚本
+└── docs/               # 架构文档与 ADR
 ```
+
+## 部署与迁移（v1 → v2）
+
+1. 应用数据库迁移并部署：
+
+   ```bash
+   wrangler d1 migrations apply memory-db --remote
+   pnpm --filter @devcxl/opencode-memory-web build
+   pnpm deploy:api
+   ```
+
+2. 配置 secrets 并注册 GitHub OAuth App（回调地址 `<worker-url>/auth/github/callback`）：
+
+   ```bash
+   wrangler secret put JWT_SECRET
+   wrangler secret put GITHUB_CLIENT_ID
+   wrangler secret put GITHUB_CLIENT_SECRET
+   ```
+
+   可选：在 `wrangler.toml` 的 `OAUTH_ALLOWLIST` 填入允许登录的 GitHub id/login；留空则首个登录者认领实例。
+
+3. 首次 GitHub 登录后，在 Web 个人中心生成 API Token，然后迁移旧数据归属并重建向量索引：
+
+   ```bash
+   npx tsx scripts/migrate-v2.ts --url https://<worker-url> --token opm_xxx --old-user-id <旧JWT sub> --force-reindex
+   ```
+
+## 插件配置
+
+在 `~/.config/opencode/opencode.json` 中添加：
+
+```json
+{
+  "plugin": [
+    ["@devcxl/opencode-memory", {
+      "remote": {
+        "apiUrl": "https://<worker-url>",
+        "apiKey": "env://OPM_API_KEY"
+      }
+    }]
+  ]
+}
+```
+
+环境变量 `OPM_API_URL` / `OPM_API_KEY` 优先于配置文件。
+
+## MCP 接入
+
+Streamable HTTP 端点：`<worker-url>/mcp`，认证使用 API Token：
+
+```bash
+claude mcp add --transport http memory https://<worker-url>/mcp --header "Authorization: Bearer opm_xxx"
+```
+
+工具：`memory_add` / `memory_search` / `memory_get` / `memory_update` / `memory_delete` / `memory_context`。
+
+## pi 接入
+
+[pi coding agent](https://pi.dev/) 不支持 MCP（官方设计决策），使用原生 TypeScript 扩展接入（见 [apps/pi-extension](./apps/pi-extension/README.md)）：
+
+```bash
+git clone https://github.com/devcxl/opencode-memory.git
+pi -e ./opencode-memory/apps/pi-extension/src/extension.ts
+
+export OPM_API_URL="https://<worker-url>"
+export OPM_API_KEY="opm_xxx"
+```
+
+提供 `memory_add/search/get/update/delete/list` 六个工具，并在每次会话开始注入服务端组装的记忆上下文。
+
+## 工具: memory（OpenCode 插件）
+
+| 操作 | 描述 | 关键参数 |
+|------|------|----------|
+| `add` | 创建记录 | `type`: daily/fact/instruction, `subtype`, `title`, `content`, `scope`, `date`, `tags` |
+| `search` | 混合搜索 | `query`, `max_results`, `scope` |
+| `get` | 读取单条 | `id` |
+| `update` | 更新单条 | `id`, `title`, `content`, `tags` |
+| `delete` | 删除单条 | `id` |
+| `list` | 列出最近记录 | `type`, `date`, `scope` |
+
+`scope`: `project`（当前 git 项目）/ `global`（全局）/ `all`。
+
+**记忆类型：**
+
+| type | 用途 |
+|------|------|
+| `daily` | 每日流水日志（默认写入目标，04:00 被 digest 汇总） |
+| `fact` | 原子事实（偏好/情景/知识），一个主题一条，写入后自动查重与新陈代谢 |
+| `instruction` | 稳定指令（身份/规则/工作流） |
+| `digest` | 每日总结（系统自动生成，每天每项目一条） |
+
+## 上下文注入
+
+会话开始时自动注入：身份 + 用户偏好 + 规则/工作流 + 项目知识 + 最近 3 条 digest，由服务端 `/api/context` 组装，无需发版即可调整注入策略。
 
 ## 许可证
 
