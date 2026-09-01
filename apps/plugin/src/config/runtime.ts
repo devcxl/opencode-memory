@@ -3,69 +3,23 @@ import * as path from "node:path";
 import * as fs from "node:fs";
 
 /**
- * 解析 opencode.json 配置（兼容 JSONC trailing comma）。
- * 先用正则移除 trailing comma，再用标准 JSON.parse。
- * opencode 自身使用 JSONC 解析器，但插件侧无此依赖，此处做最小兼容。
+ * 插件运行时配置（v2：仅远程模式）。
+ * 存储完全由 Cloudflare Worker 承担，本地不再有任何记忆文件。
  */
-function parseConfigFile(raw: string): unknown {
-  // 移除 trailing comma: ,] → ]  ,} → }
-  const cleaned = raw.replace(/,(\s*[}\]])/g, "$1");
-  return JSON.parse(cleaned);
-}
 
-/** 远程模式配置 */
+/** 远程 Worker 配置 */
 export interface RemoteConfig {
   apiUrl: string;
   apiKey: string;
 }
 
-/** 内存插件运行时配置 */
-export interface MemoryConfig {
-  memoryDir: string;
-  /** 运行模式：local（本地文件+向量索引）或 remote（Cloudflare Worker API） */
-  mode: "local" | "remote";
-  /** 远程模式配置（mode=remote 时必填） */
-  remote?: RemoteConfig;
+export interface MemoryConfig extends RemoteConfig {
+  /** 自动探测 git 项目并作为 project_id 作用域（默认开启） */
+  autoProject: boolean;
 }
 
 function getHomeDir(): string {
   return process.env.HOME || os.homedir();
-}
-
-/** 根据平台获取 memory 目录路径。Windows 使用 AppData，其他平台使用 ~/.config */
-export function getMemoryDir(): string {
-  const home = getHomeDir();
-  if (os.platform() === "win32") {
-    return path.join(home, "AppData", "Roaming", "opencode", "memory");
-  }
-  return path.join(home, ".config", "opencode", "memory");
-}
-
-/** 获取插件配置对象（完整的嵌套 JSON 对象，而非扁平 key） */
-export function getPluginConfigObject(): Record<string, unknown> | undefined {
-  const configPath = getOpencodeConfigPath();
-
-  try {
-    const raw = fs.readFileSync(configPath, "utf-8");
-    const cfg = parseConfigFile(raw) as Record<string, unknown>;
-    if (!Array.isArray(cfg.plugin)) return undefined;
-
-    for (const entry of cfg.plugin) {
-      if (
-        Array.isArray(entry) &&
-        entry.length >= 2 &&
-        typeof entry[0] === "string" &&
-        entry[0].includes("opencode-memory")
-      ) {
-        const opts = entry[1];
-        if (opts && typeof opts === "object") {
-          return opts as Record<string, unknown>;
-        }
-      }
-    }
-  } catch {}
-
-  return undefined;
 }
 
 /** 解析 env:// 前缀的配置值：env://OPM_API_KEY → process.env.OPM_API_KEY */
@@ -77,60 +31,27 @@ export function resolveEnvRef(value: string | undefined): string | undefined {
   return value;
 }
 
-/** 生成运行时配置对象，支持 opencode.json + 环境变量双重配置 */
-export function loadConfig(): MemoryConfig {
-  const memoryDir = getMemoryDir();
-  const pluginOpts = getPluginConfigObject();
-
-  // 从 opencode.json 读取 mode
-  const configMode = pluginOpts?.mode as string | undefined;
-
-  // 从 opencode.json 读取 remote 嵌套配置
-  const remoteConfig = pluginOpts?.remote as Record<string, string> | undefined;
-  const configApiUrl = remoteConfig?.apiUrl;
-  const configApiKeyRaw = remoteConfig?.apiKey;
-
-  // 环境变量覆盖：OPM_MODE > opencode.json > 默认 "local"
-  const effectiveMode: "local" | "remote" =
-    process.env.OPM_MODE === "remote"
-      ? "remote"
-      : configMode === "remote"
-        ? "remote"
-        : "local";
-
-  const config: MemoryConfig = { memoryDir, mode: effectiveMode };
-
-  if (effectiveMode === "remote") {
-    // apiKey 优先级：OPM_API_KEY 环境变量 > opencode.json remote.apiKey（均支持 env:// 前缀）
-    const apiKey = resolveEnvRef(process.env.OPM_API_KEY || configApiKeyRaw);
-    if (!apiKey) {
-      throw new Error(
-        "Remote mode requires apiKey. Set OPM_API_KEY or configure remote.apiKey in opencode.json.",
-      );
-    }
-    config.remote = {
-      apiUrl: process.env.OPM_API_URL || configApiUrl || "",
-      apiKey,
-    };
-  }
-
-  return config;
-}
-
 /** 获取 opencode 配置文件路径 */
 export function getOpencodeConfigPath(): string {
   return path.join(getHomeDir(), ".config", "opencode", "opencode.json");
 }
 
-/** 从 opencode 配置文件读取本插件配置选项 */
-export function getPluginConfigOption(key: string): string | undefined {
-  const configPath = getOpencodeConfigPath();
+/**
+ * 解析 opencode.json 配置（兼容 JSONC trailing comma）。
+ * opencode 自身使用 JSONC 解析器，插件侧无此依赖，此处做最小兼容。
+ */
+function parseConfigFile(raw: string): unknown {
+  const cleaned = raw.replace(/,(\s*[}\]])/g, "$1");
+  return JSON.parse(cleaned);
+}
 
+/** 获取本插件在 opencode.json 里的配置对象（plugin: [["name", {...}]] 的第二项） */
+export function getPluginConfigObject(): Record<string, unknown> | undefined {
+  const configPath = getOpencodeConfigPath();
   try {
     const raw = fs.readFileSync(configPath, "utf-8");
     const cfg = parseConfigFile(raw) as Record<string, unknown>;
     if (!Array.isArray(cfg.plugin)) return undefined;
-
     for (const entry of cfg.plugin) {
       if (
         Array.isArray(entry) &&
@@ -139,25 +60,35 @@ export function getPluginConfigOption(key: string): string | undefined {
         entry[0].includes("opencode-memory")
       ) {
         const opts = entry[1];
-        if (opts && typeof opts === "object" && key in opts) {
-          return String(opts[key]);
-        }
+        if (opts && typeof opts === "object")
+          return opts as Record<string, unknown>;
       }
     }
   } catch {}
-
   return undefined;
 }
 
-/** 检测系统 locale 是否为中文 */
-export function isZhLocale(): boolean {
-  const lang = (
-    process.env.LANG ||
-    process.env.LC_ALL ||
-    process.env.LC_CTYPE ||
-    ""
-  ).toLowerCase();
-  return lang.startsWith("zh");
+/** 生成运行时配置。优先级：环境变量 > opencode.json remote 配置 */
+export function loadConfig(): MemoryConfig {
+  const pluginOpts = getPluginConfigObject();
+  const remoteOpts = pluginOpts?.remote as Record<string, string> | undefined;
+
+  const apiKey = resolveEnvRef(process.env.OPM_API_KEY || remoteOpts?.apiKey);
+  const apiUrl =
+    process.env.OPM_API_URL || resolveEnvRef(remoteOpts?.apiUrl) || "";
+
+  if (!apiKey) {
+    throw new Error(
+      "[opencode-memory] 远程模式需要 API Token。先在 Web 管理台个人中心生成 Token，然后设置 OPM_API_KEY 环境变量，或在 opencode.json 插件配置里填写 remote.apiKey。",
+    );
+  }
+
+  const autoProject =
+    pluginOpts?.autoProject === undefined
+      ? true
+      : Boolean(pluginOpts.autoProject);
+
+  return { apiUrl, apiKey, autoProject };
 }
 
 /** 检查是否启用 debug 日志 */
