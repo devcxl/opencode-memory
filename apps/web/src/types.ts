@@ -1,21 +1,23 @@
 import type {
-  Memory,
+  MemoryRecord,
+  MemoryType,
+  SearchResult,
   AskResponse,
   RagCitation,
   ApiResponse,
   Stats,
-  Instruction,
-  Learning,
-  Daily,
+  User,
+  ApiTokenView,
 } from '@devcxl/opencode-memory-shared'
 
 export type {
-  Memory,
+  MemoryRecord,
+  MemoryType,
+  SearchResult,
   AskResponse,
   RagCitation,
   ApiResponse,
   Stats,
-  Instruction,
-  Learning,
-  Daily,
+  User,
+  ApiTokenView,
 }
