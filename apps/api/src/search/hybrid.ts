@@ -1,233 +1,267 @@
-import type { AskResponse, Env, KeywordSearchResult, Memory, RagCitation } from '../types'
-import { crossTableSearch } from './cross-table'
+import type { Env, MemoryRecord, MemoryType, SearchResult } from '../types'
+import { MAX_VECTOR_TOP_K } from '../types'
+import { preprocessQuery, buildFtsMatchExpression, type ProcessedQuery } from './tokenizer'
+import { runAIWithTimeout } from '../utils/ai'
+import { EMBEDDING_MODEL } from '../types'
 
-// ─── 类型定义 ───────────────────────────────────────
+/**
+ * 两桶分层混合搜索：
+ * 1. FTS AND 全命中的记录进入桶 A（full-match）——"华北销售额" 命中 {华北,销售额}，
+ *    而 "华东销售额" 只命中 {销售额}，只能进桶 B，向量分再高也排不到前面
+ * 2. 其余候选（FTS OR 部分命中 + 向量召回）进入桶 B（fused）
+ * 3. 桶内 RRF 融合（FTS 排名 + 向量排名），桶 A 永远整体排在桶 B 之前
+ * 4. 可选：分面（entities）硬过滤——候选池并入实体命中记录，最终只保留全部分面匹配的结果
+ */
 
-interface GenerationResponse {
-  response?: string | {
-    answer?: string
-    citations?: string[]
-  }
-  choices?: Array<{
-    message?: {
-      content?: string
-    }
-    text?: string
-  }>
-}
+const RRF_K = 60
 
-interface QueryOptions {
+interface SearchOptions {
   query: string
   userId: string
-  kind?: 'short' | 'long'
   topK?: number
+  type?: MemoryType
+  projectId?: string
+  facets?: Record<string, string>
 }
 
-/** 跨表检索结果（已还原为 Memory 结构） */
-interface RankedMemory extends Memory {
-  vectorScore: number
+interface FtsRow {
+  id: string
+  snippet: string
+  rank: number
+}
+
+interface Candidate {
+  id: string
+  bucket: 'full-match' | 'fused'
   score: number
+  snippet: string
 }
 
-// ─── 常量 ───────────────────────────────────────────
+export async function searchMemories(env: Env, opts: SearchOptions): Promise<SearchResult[]> {
+  const { query, userId, type, projectId, facets } = opts
+  const topK = Math.min(Math.max(opts.topK ?? 8, 1), MAX_VECTOR_TOP_K)
 
-const MIN_ASK_TOP_K = 6
+  const processed = preprocessQuery(query)
+  const hasFts = processed.tokens.length > 0
 
-// ─── RAG 问答 ───────────────────────────────────────
+  // 并行：FTS AND（桶 A）+ FTS OR（桶 B 候选）+ 向量召回
+  const [andRows, orRows, vecIds] = await Promise.all([
+    hasFts ? ftsQuery(env, { processed, userId, type, mode: 'AND', limit: topK * 3 }) : [],
+    hasFts ? ftsQuery(env, { processed, userId, type, mode: 'OR', limit: topK * 4 }) : [],
+    vectorCandidateIds(env, { query, userId, type, projectId, topK }),
+  ])
 
-function buildMessages(question: string, memories: RankedMemory[]): Array<{ role: string; content: string }> {
-  const context = memories.map((m) =>
-    `[${m.id}]\nkind: ${m.kind}\ncreated_at: ${new Date(m.created_at).toISOString()}\ntext:\n${m.text}`
-  ).join('\n\n')
+  const andIds = new Set(andRows.map((r) => r.id))
+  const vecIdSet = new Set(vecIds)
 
-  return [
-    {
-      role: 'system',
-      content: `You are a retrieval assistant. Answer only from the provided memory context.
-If the context is insufficient, say that clearly.
-Return valid JSON with this shape:
-{"answer":"string","citations":["memory-id-1","memory-id-2"]}
-/no_think`,
-    },
-    {
-      role: 'user',
-      content: `Question:\n${question}\n\nContext:\n${context}`,
-    },
-  ]
-}
+  // 桶 A：AND 全命中；桶 B：OR 部分命中（去掉 A）+ 向量召回（去掉 A）
+  const listA_f = andRows.map((r) => r.id)
+  const listB_f = orRows.filter((r) => !andIds.has(r.id)).map((r) => r.id)
+  const listA_v = vecIds.filter((id) => andIds.has(id))
+  const listB_v = vecIds.filter((id) => !andIds.has(id))
 
-function parseJsonResponse(text: string): { answer?: string; citations?: string[] } | null {
-  // 支持 ```json ... ``` 和裸 JSON 两种格式
-  const cleaned = text.replace(/```(?:json)?\s*/gi, '').replace(/\s*```/g, '')
-  const match = cleaned.match(/\{[\s\S]*\}/)
-  if (!match) return null
+  const scoreA = rrf(listA_f, listA_v)
+  const scoreB = rrf(listB_f, listB_v)
 
-  try {
-    return JSON.parse(match[0]) as { answer?: string; citations?: string[] }
-  } catch {
-    return null
+  const candidates: Candidate[] = []
+  for (const row of andRows) {
+    candidates.push({ id: row.id, bucket: 'full-match', score: scoreA.get(row.id) || 0, snippet: row.snippet })
   }
-}
+  const orSnippet = new Map(orRows.map((r) => [r.id, r.snippet]))
+  for (const id of new Set([...listB_f, ...listB_v])) {
+    candidates.push({
+      id,
+      bucket: 'fused',
+      score: scoreB.get(id) || 0,
+      snippet: orSnippet.get(id) || '',
+    })
+  }
 
-function extractStructuredAnswer(
-  response: GenerationResponse
-): { answer?: string; citations?: string[] } | null {
-  const candidate = response.response
-  if (typeof candidate === 'object' && candidate !== null) {
-    const answer = typeof candidate.answer === 'string' ? candidate.answer : undefined
-    const citations = Array.isArray(candidate.citations)
-      ? candidate.citations.filter((item): item is string => typeof item === 'string')
-      : undefined
-
-    if (answer !== undefined || citations !== undefined) {
-      return { answer, citations }
+  // 分面硬过滤：实体命中记录并入候选池（防止漏召），最终只保留全部分面匹配的记录
+  let allowedIds: Set<string> | null = null
+  let allowedExtra: string[] = []
+  if (facets && Object.keys(facets).length > 0) {
+    allowedIds = await filterIdsByFacets(env, userId, facets)
+    allowedExtra = [...allowedIds].filter((id) => !candidates.some((c) => c.id === id))
+    for (const id of allowedExtra) {
+      candidates.push({ id, bucket: 'fused', score: 0, snippet: '' })
     }
   }
 
-  const text = extractModelText(response)
-  if (text) {
-    return parseJsonResponse(text)
-  }
+  // 排序：桶 A 整体在前，桶内按 RRF 分数
+  candidates.sort((a, b) => {
+    if (a.bucket !== b.bucket) return a.bucket === 'full-match' ? -1 : 1
+    if (b.score !== a.score) return b.score - a.score
+    return 0
+  })
+  const topCandidates = candidates.slice(0, topK)
 
-  return null
+  const records = await hydrate(env, userId, topCandidates.map((c) => c.id))
+  const recordMap = new Map(records.map((r) => [r.id, r]))
+
+  const results: SearchResult[] = []
+  for (const c of topCandidates) {
+    const record = recordMap.get(c.id)
+    if (!record) continue
+    if (allowedIds && !allowedIds.has(c.id)) continue
+    results.push(toSearchResult(record, c))
+  }
+  return results
 }
 
-function extractModelText(response: GenerationResponse): string {
-  if (typeof response.response === 'string') {
-    return response.response
-  }
+// ── FTS 查询 ──
 
-  const firstChoice = response.choices?.[0]
-  if (typeof firstChoice?.message?.content === 'string') {
-    return firstChoice.message.content
-  }
-
-  if (typeof firstChoice?.text === 'string') {
-    return firstChoice.text
-  }
-
-  return ''
-}
-
-function mapSource(source?: string): 'learning' | 'instruction' | 'daily' | 'memory' | undefined {
-  switch (source) {
-    case 'learnings':
-    case 'learning':
-      return 'learning'
-    case 'instructions':
-    case 'instruction':
-      return 'instruction'
-    case 'dailies':
-    case 'daily':
-      return 'daily'
-    case 'memories':
-    case 'memory':
-      return 'memory'
-    default:
-      return undefined
-  }
-}
-
-export async function answerQuestion(
+async function ftsQuery(
   env: Env,
-  runAIWithTimeout: <T>(ai: Env['AI'], model: string, input: unknown) => Promise<T>,
-  options: QueryOptions
-): Promise<AskResponse> {
-  if (!env.AI) throw new Error('AI not configured')
+  args: { processed: ProcessedQuery; userId: string; type?: MemoryType; mode: 'AND' | 'OR'; limit: number },
+): Promise<FtsRow[]> {
+  const matchExpr = buildFtsMatchExpression(args.processed.tokens, args.mode)
+  if (!matchExpr) return []
 
-  const topK = Math.max(options.topK || MIN_ASK_TOP_K, MIN_ASK_TOP_K)
-
-  // 跨表统一检索（结构化记忆 + 经典 memories 表均由 cross-table 负责）
-  const crossResults = await crossTableSearch(env, runAIWithTimeout, {
-    query: options.query,
-    userId: options.userId,
-    kind: options.kind,
-    topK,
-  }).catch(() => [] as KeywordSearchResult[])
-
-  const rankedMemories: RankedMemory[] = crossResults.map((r) => ({
-    id: r.id,
-    user_id: r.user_id,
-    kind: (r.kind || 'long') as 'short' | 'long',
-    text: r.text,
-    tags: r.tags || '[]',
-    source: r.file_type,
-    created_at: r.created_at,
-    expires_at: null,
-    consolidated_at: null,
-    archived: 0,
-    project_id: r.project_id || '',
-    file_type: r.file_type || 'memory',
-    date: r.date || null,
-    vectorScore: r.score || 0,
-    score: r.score || 0,
-  }))
-
-  if (rankedMemories.length === 0) {
-    return { answer: 'I could not find relevant memories for that question.', citations: [] }
+  const bindings: Array<string | number> = [matchExpr, args.userId]
+  let sql = `SELECT id, snippet(memories_fts, 0, '<b>', '</b>', '...', 40) AS snippet, bm25(memories_fts) AS rank
+             FROM memories_fts WHERE memories_fts MATCH ? AND user_id = ?`
+  if (args.type) {
+    sql += ' AND id IN (SELECT id FROM memories WHERE type = ?)'
+    bindings.push(args.type)
   }
+  sql += ' ORDER BY rank ASC LIMIT ?'
+  bindings.push(args.limit)
 
-  // LLM 生成
-  const promptMemories = rankedMemories.slice(0, 5)
-  const generationInput = {
-    messages: buildMessages(options.query, promptMemories),
-    max_tokens: 4096,
-    temperature: 0.2,
-  }
-
-  let response: GenerationResponse
   try {
-    response = await runAIWithTimeout<GenerationResponse>(
-      env.AI,
-      '@cf/qwen/qwen3-30b-a3b-fp8',
-      {
-        ...generationInput,
-        response_format: {
-          type: 'json_schema',
-          json_schema: {
-            type: 'object',
-            properties: {
-              answer: { type: 'string' },
-              citations: {
-                type: 'array',
-                items: { type: 'string' },
-              },
-            },
-            required: ['answer', 'citations'],
-            additionalProperties: false,
-          },
-        },
-      }
+    const { results } = await env.DB.prepare(sql).bind(...bindings).all<FtsRow>()
+    return results || []
+  } catch (error) {
+    console.error('[fts] query failed:', error instanceof Error ? error.message : error)
+    return []
+  }
+}
+
+// ── 向量召回 ──
+
+interface VectorMatch {
+  id: string
+  score?: number
+}
+
+export async function vectorCandidateIds(
+  env: Env,
+  args: { query: string; userId: string; type?: MemoryType; projectId?: string; topK: number },
+): Promise<string[]> {
+  if (!env.AI || !env.VEC) return []
+
+  const embedding = await runAIWithTimeout<{ data: number[][] }>(env.AI, EMBEDDING_MODEL, { text: args.query })
+
+  const filter: Record<string, string> = { user_id: args.userId }
+  if (args.type) filter.type = args.type
+  if (args.projectId) filter.project_id = args.projectId
+
+  const response = await env.VEC.query(embedding.data[0], {
+    topK: Math.min(args.topK, MAX_VECTOR_TOP_K),
+    filter,
+    returnMetadata: 'none',
+  })
+  return ((response.matches || []) as VectorMatch[]).map((m) => m.id)
+}
+
+/** 仅向量召回的候选记录（fact 后处理查重/矛盾检测用） */
+export async function fetchVectorCandidates(
+  env: Env,
+  args: { query: string; userId: string; type?: MemoryType; topK: number },
+): Promise<Array<Pick<MemoryRecord, 'id' | 'title' | 'content'>>> {
+  if (!env.AI || !env.VEC) return []
+  try {
+    const ids = await vectorCandidateIds(env, { ...args, projectId: undefined })
+    if (ids.length === 0) return []
+    const placeholders = ids.map(() => '?').join(',')
+    const { results } = await env.DB.prepare(
+      `SELECT id, title, content FROM memories
+       WHERE id IN (${placeholders}) AND user_id = ? AND archived = 0`,
     )
-  } catch {
-    response = await runAIWithTimeout<GenerationResponse>(
-      env.AI,
-      '@cf/qwen/qwen3-30b-a3b-fp8',
-      generationInput
-    )
+      .bind(...ids, args.userId)
+      .all<Pick<MemoryRecord, 'id' | 'title' | 'content'>>()
+    return results || []
+  } catch (error) {
+    console.error('[vector] candidate fetch failed:', error instanceof Error ? error.message : error)
+    return []
+  }
+}
+
+// ── 分面过滤 ──
+
+/** 返回同时匹配全部分面的记忆 id 集合 */
+async function filterIdsByFacets(env: Env, userId: string, facets: Record<string, string>): Promise<Set<string>> {
+  const entries = Object.entries(facets).filter(([k, v]) => k && v)
+  if (entries.length === 0) return new Set()
+
+  const keyConditions = entries.map(() => '(key = ? AND value = ?)').join(' OR ')
+  const bindings: string[] = [userId]
+  for (const [k, v] of entries) {
+    bindings.push(k.trim().toLowerCase(), v.trim())
   }
 
-  const rawText = extractModelText(response)
-  const parsed = extractStructuredAnswer(response)
-  const citedIds = new Set(
-    parsed?.citations?.length
-      ? parsed.citations
-      : promptMemories.slice(0, 3).map(m => m.id)
+  const { results } = await env.DB.prepare(
+    `SELECT memory_id, key, value FROM memory_entities
+     WHERE user_id = ? AND (${keyConditions})`,
   )
+    .bind(...bindings)
+    .all<{ memory_id: string; key: string; value: string }>()
 
-  const citations: RagCitation[] = promptMemories
-    .filter(m => citedIds.has(m.id))
-    .map(m => ({
-      memoryId: m.id,
-      text: m.text,
-      createdAt: m.created_at,
-      kind: m.kind,
-      score: m.score,
-      source: mapSource(m.source),
-    }))
+  // 按 memory_id 分组，校验每个分面都有命中
+  const hits = new Map<string, Set<string>>()
+  for (const row of results || []) {
+    if (!hits.has(row.memory_id)) hits.set(row.memory_id, new Set())
+    hits.get(row.memory_id)!.add(`${row.key}=${row.value}`)
+  }
 
+  const allowed = new Set<string>()
+  for (const [memoryId, pairs] of hits) {
+    if (entries.every(([k, v]) => pairs.has(`${k.trim().toLowerCase()}=${v.trim()}`))) {
+      allowed.add(memoryId)
+    }
+  }
+  return allowed
+}
+
+// ── RRF 与组装 ──
+
+function rrf(...rankedLists: string[][]): Map<string, number> {
+  const scores = new Map<string, number>()
+  for (const list of rankedLists) {
+    for (let i = 0; i < list.length; i++) {
+      scores.set(list[i], (scores.get(list[i]) || 0) + 1 / (RRF_K + i + 1))
+    }
+  }
+  return scores
+}
+
+async function hydrate(env: Env, userId: string, ids: string[]): Promise<MemoryRecord[]> {
+  if (ids.length === 0) return []
+  const placeholders = ids.map(() => '?').join(',')
+  const { results } = await env.DB.prepare(
+    `SELECT id, user_id, type, subtype, title, content, scope, project_id, date, tags, source, source_ids, meta,
+            created_at, updated_at, digested_at, archived
+     FROM memories
+     WHERE id IN (${placeholders}) AND user_id = ? AND archived = 0`,
+  )
+    .bind(...ids, userId)
+    .all<MemoryRecord>()
+  return results || []
+}
+
+function toSearchResult(record: MemoryRecord, candidate: Candidate): SearchResult {
   return {
-    answer: parsed?.answer?.trim() || rawText.trim() || 'I could not generate an answer from the retrieved context.',
-    citations,
+    id: record.id,
+    type: record.type,
+    subtype: record.subtype,
+    title: record.title,
+    content: record.content,
+    tags: record.tags,
+    project_id: record.project_id,
+    date: record.date,
+    created_at: record.created_at,
+    bucket: candidate.bucket,
+    score: candidate.score,
+    snippet: candidate.snippet,
   }
 }

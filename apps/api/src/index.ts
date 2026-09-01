@@ -1,692 +1,457 @@
 import { Hono } from 'hono'
-import { cors } from 'hono/cors'
 import { HTTPException } from 'hono/http-exception'
-import { jwtVerify } from 'jose'
+import { cors as corsMiddleware } from 'hono/cors'
 import { z } from 'zod'
-import { consolidateMemories, cleanupExpiredMemories } from './cron/consolidate'
-import { upsertMemoryVector, type IndexableMemory } from './search/indexing'
-import { searchMemoriesByKeyword } from './search/keyword-search'
-import { answerQuestion } from './search/hybrid'
-import { runAIWithTimeout } from './utils/ai'
-import { withRetry } from './utils/retry'
-import { createMemory, listMemories, searchMemories, promoteMemory, deleteMemory } from './services/memory-service'
-import { createInstruction, listInstructions, getInstruction, deleteInstruction } from './services/instruction-service'
-import { createLearning, listLearnings, getLearning, deleteLearning } from './services/learning-service'
-import { createDaily, listDailies, getDaily, deleteDaily } from './services/daily-service'
-import { triggerExtraction, getExtractionStatus } from './services/extraction-service'
-import type { MiddlewareHandler } from 'hono'
-import type { Env, Variables } from './types'
+import type { Env, Variables, MemoryType, ApiResponse, WaitContext } from './types'
 import { DEFAULT_LIMIT, MAX_LIMIT, CRON_SCHEDULE } from './types'
-
-// Input validation schemas
-const memorySchema = z.object({
-  text: z.string().min(1).max(10000),
-  tags: z.array(z.string()).optional(),
-  kind: z.enum(['short', 'long']).optional(),
-  file_type: z.enum(['memory', 'identity', 'user', 'daily']).optional(),
-  project_id: z.string().max(200).optional(),
-  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-})
-
-const semanticSearchSchema = z.object({
-  query: z.string().min(1).max(1000),
-  kind: z.enum(['short', 'long']).optional(),
-  topK: z.number().int().min(1).max(20).optional(),
-  file_type: z.string().optional(),
-  project_id: z.string().optional(),
-})
-
-const keywordSearchSchema = z.object({
-  query: z.string().min(1).max(1000),
-  kind: z.enum(['short', 'long']).optional(),
-  limit: z.number().int().min(1).max(20).optional(),
-  file_type: z.string().optional(),
-  project_id: z.string().optional(),
-})
-
-const askSchema = z.object({
-  question: z.string().min(1).max(1000),
-  kind: z.enum(['short', 'long']).optional(),
-  topK: z.number().int().min(1).max(20).optional(),
-})
+import { authMiddleware } from './auth/middleware'
+import {
+  githubLoginUrl,
+  handleGithubCallback,
+  signOAuthState,
+  verifySession,
+  SESSION_COOKIE,
+  OAUTH_STATE_COOKIE,
+} from './auth/github'
+import { generateApiToken, hashToken, tokenPrefix, verifyApiToken } from './auth/tokens'
+import {
+  createMemory,
+  listMemories,
+  getMemory,
+  updateMemory,
+  deleteMemory,
+} from './services/memory-service'
+import { searchMemories } from './search/hybrid'
+import { buildContext } from './services/context-service'
+import { answerQuestion } from './services/ask-service'
+import { runDailyDigest, digestOneGroup, startJob, finishJob, getLatestJob } from './services/digest-service'
+import { tzOffsetHours, userYesterday } from './utils/tz'
+import { reindexAll } from './search/indexing'
+import { handleMcpPost } from './mcp/server'
 
 const app = new Hono<{ Bindings: Env; Variables: Variables }>()
 
-app.use('*', cors({
-  // 动态校验请求来源，仅放行 allowlist 中的 Origin
+// ── 中间件 ──
+
+app.use('*', corsMiddleware({
   origin: (_origin, c) => {
-    const allowedOrigins = c.env.ALLOWED_ORIGINS
-      ? c.env.ALLOWED_ORIGINS.split(',').map((o: string) => o.trim())
-      : ['http://localhost:3000', 'http://127.0.0.1:3000']
-
-    // 取请求头 Origin，判断是否在 allowlist 内
-    const requestOrigin = c.req.header('Origin') || c.req.header('origin')
-    // 支持 "*" 通配符（放行任意来源）；有 Origin 且被允许时回显该 Origin
-    const allowAll = allowedOrigins.includes('*')
-    const isAllowed = allowAll || allowedOrigins.includes(requestOrigin || '')
-
-    if (requestOrigin && isAllowed) return requestOrigin
-    return allowedOrigins[0] || '*'
+    const allowed = (c.env.ALLOWED_ORIGINS || 'http://localhost:3000,http://127.0.0.1:3000')
+      .split(',')
+      .map((o: string) => o.trim())
+    const requestOrigin = c.req.header('Origin')
+    if (allowed.includes('*')) return requestOrigin || '*'
+    if (requestOrigin && allowed.includes(requestOrigin)) return requestOrigin
+    return allowed[0] || '*'
   },
-  allowHeaders: ['Authorization', 'Content-Type'],
+  allowHeaders: ['Authorization', 'Content-Type', 'Mcp-Session-Id', 'MCP-Protocol-Version'],
   allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   credentials: true,
 }))
 
-// Structured logging middleware
 app.use('*', async (c, next) => {
   const start = Date.now()
   const requestId = crypto.randomUUID()
-  const method = c.req.method
-  const path = c.req.path
-
-  // Add request ID to context for tracking
   c.set('requestId', requestId)
-
-  // Get user ID if available (after auth)
-  const userId = c.get('userId') as string | undefined
-
   try {
     await next()
   } finally {
-    const duration = Date.now() - start
-    const status = c.res.status
-
-    const logEntry = {
+    console.log(JSON.stringify({
       timestamp: new Date().toISOString(),
       requestId,
-      userId: userId || null,
-      method,
-      path,
-      status,
-      duration,
-    }
-
-    // Log as JSON
-    console.log(JSON.stringify(logEntry))
+      userId: c.get('userId') ?? null,
+      method: c.req.method,
+      path: c.req.path,
+      status: c.res.status,
+      duration: Date.now() - start,
+    }))
   }
 })
 
-interface JWTPayload {
-  sub: string
-  role?: string
-  iat?: number
-  exp?: number
-}
-
-// Rate limiting configuration
-const RATE_LIMIT_WINDOW = 60 // 60 seconds
-const DEFAULT_RATE_LIMIT = 100 // requests per window
-
-async function checkRateLimit(env: Env, userId: string): Promise<boolean> {
-  const limit = parseInt(env.RATE_LIMIT || String(DEFAULT_RATE_LIMIT))
-  const now = Date.now()
-  const windowStart = Math.floor(now / 1000 / RATE_LIMIT_WINDOW) * RATE_LIMIT_WINDOW
-
-  try {
-    // Try to increment counter using D1
-    await env.DB.prepare(
-      'INSERT INTO rate_limits (user_id, window_start, count) VALUES (?, ?, 1)'
-    ).bind(userId, windowStart).run()
-
-    // Get current count
-    const current = await env.DB.prepare(
-      'SELECT count FROM rate_limits WHERE user_id = ? AND window_start = ?'
-    ).bind(userId, windowStart).first() as { count: number } | undefined
-
-    return (current?.count || 0) <= limit
-  } catch (error) {
-    // If rate_limits table doesn't exist, use alternative check
-    // Try to use INSERT OR REPLACE as fallback
-    try {
-      await env.DB.prepare(
-        'INSERT OR REPLACE INTO rate_limits (user_id, window_start, count) SELECT ?, ?, COALESCE((SELECT count FROM rate_limits WHERE user_id = ? AND window_start = ?), 0) + 1'
-      ).bind(userId, windowStart, userId, windowStart).run()
-
-      const current = await env.DB.prepare(
-        'SELECT count FROM rate_limits WHERE user_id = ? AND window_start = ?'
-      ).bind(userId, windowStart).first() as { count: number } | undefined
-
-      return (current?.count || 0) <= limit
-    } catch {
-      // If table doesn't exist, allow the request
-      console.warn('Rate limit table not available')
-      return true
-    }
-  }
-}
-
-async function verifyJWT(token: string, env: Env): Promise<JWTPayload> {
-  try {
-    const secret = new TextEncoder().encode(env.JWT_SECRET)
-    const { payload } = await jwtVerify(token, secret, {
-      algorithms: ['HS256'],
-    })
-    return payload as JWTPayload
-  } catch {
-    throw new HTTPException(401, { message: 'Unauthorized' })
-  }
-}
-
-// 认证 + 限流中间件（/api/* 共用）
-const authMiddleware: MiddlewareHandler<{ Bindings: Env; Variables: Variables }> = async (c, next) => {
-  const auth = c.req.header('Authorization')
-  if (!auth?.startsWith('Bearer ')) {
-    throw new HTTPException(401, { message: 'Unauthorized' })
-  }
-  const payload = await verifyJWT(auth.slice(7), c.env)
-  c.set('userId', payload.sub)
-  c.set('userRole', payload.role)
-
-  const allowed = await checkRateLimit(c.env, payload.sub)
-  if (!allowed) {
-    throw new HTTPException(429, { message: 'Too many requests' })
-  }
-
-  await next()
-}
-
-app.use('/api/*', authMiddleware)
-
-// 全局错误处理：所有异常统一转为 JSON 响应，携带可读的 error 信息
 app.onError((err, c) => {
   const requestId = c.get('requestId') as string | undefined
-
-  // HTTPException：保留原始状态码，返回其 message
   if (err instanceof HTTPException) {
     const message = err.message || c.req.path
     console.error(`[${requestId ?? '-'}] HTTP ${err.status} ${c.req.method} ${c.req.path}: ${message}`)
-    return c.json({ success: false, error: message }, err.status)
+    return c.json({ success: false, error: message } satisfies ApiResponse<never>, err.status)
   }
-
-  // 未知异常：记录完整堆栈，返回 500 + 错误信息（不暴露堆栈）
   const message = err instanceof Error ? err.message : 'Unknown error'
   console.error(`[${requestId ?? '-'}] Unhandled ${c.req.method} ${c.req.path}:`, err)
-  return c.json({ success: false, error: message }, 500)
+  return c.json({ success: false, error: message } satisfies ApiResponse<never>, 500)
 })
 
-// 未匹配路由统一 404
-app.notFound((c) => {
-  return c.json({ success: false, error: `Not found: ${c.req.method} ${c.req.path}` }, 404)
+app.notFound((c) => c.json({ success: false, error: `Not found: ${c.req.method} ${c.req.path}` } satisfies ApiResponse<never>, 404))
+
+// 所有 /api/* 与 /mcp 走统一认证（Bearer Token 或会话 Cookie）
+app.use('/api/*', authMiddleware)
+app.use('/mcp', authMiddleware)
+
+// ── 健康检查 ──
+
+app.get('/health', (c) => c.text('OK'))
+
+// ── GitHub OAuth（免认证） ──
+
+app.get('/auth/github/login', async (c) => {
+  if (!c.env.GITHUB_CLIENT_ID) {
+    return c.json({ success: false, error: 'GitHub OAuth not configured' } satisfies ApiResponse<never>, 500)
+  }
+  const state = await signOAuthState(c.env)
+  const loginUrl = githubLoginUrl(c.env, new URL(c.req.url).origin)
+  const res = c.redirect(loginUrl, 302)
+  res.headers.append(
+    'Set-Cookie',
+    `${OAUTH_STATE_COOKIE}=${state}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600`,
+  )
+  return res
 })
+
+app.get('/auth/github/callback', async (c) => {
+  const code = c.req.query('code') || ''
+  const state = c.req.query('state') || ''
+  const stateCookie = readCookie(c.req.header('Cookie') || '', OAUTH_STATE_COOKIE)
+  const origin = new URL(c.req.url).origin
+
+  const result = await handleGithubCallback(c.env, code, state, stateCookie || '', origin)
+  const res = c.redirect(result.redirect, 302)
+  if (result.setCookie) res.headers.append('Set-Cookie', result.setCookie)
+  // 用完即弃 state cookie
+  res.headers.append('Set-Cookie', `${OAUTH_STATE_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`)
+  return res
+})
+
+app.get('/auth/logout', (c) => {
+  const res = c.redirect('/', 302)
+  res.headers.append('Set-Cookie', `${SESSION_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`)
+  return res
+})
+
+// ── 会话信息 ──
+
+app.get('/api/me', async (c) => {
+  const userId = c.get('userId') as string
+  const user = await c.env.DB.prepare('SELECT id, github_id, login, name, avatar_url, created_at, last_login_at FROM users WHERE id = ?')
+    .bind(userId)
+    .first()
+  return c.json({ success: true, data: user })
+})
+
+// ── API Token 管理 ──
+
+const tokenCreateSchema = z.object({ name: z.string().min(1).max(100) })
+
+app.post('/api/tokens', async (c) => {
+  const userId = c.get('userId') as string
+  const body = await c.req.json().catch(() => ({}))
+  const parsed = tokenCreateSchema.safeParse(body)
+  if (!parsed.success) {
+    throw new HTTPException(400, { message: parsed.error.issues.map((i) => i.message).join(', ') })
+  }
+
+  const token = generateApiToken()
+  const id = crypto.randomUUID()
+  const now = Date.now()
+  await c.env.DB.prepare(
+    'INSERT INTO api_tokens (id, user_id, name, token_hash, prefix, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+  )
+    .bind(id, userId, parsed.data.name, await hashToken(token), tokenPrefix(token), now)
+    .run()
+
+  // 明文只在创建响应中返回一次
+  return c.json({ success: true, data: { id, name: parsed.data.name, prefix: tokenPrefix(token), token, created_at: now } })
+})
+
+app.get('/api/tokens', async (c) => {
+  const userId = c.get('userId') as string
+  const { results } = await c.env.DB.prepare(
+    'SELECT id, name, prefix, created_at, last_used_at, revoked_at FROM api_tokens WHERE user_id = ? AND revoked_at IS NULL ORDER BY created_at DESC',
+  )
+    .bind(userId)
+    .all()
+  return c.json({ success: true, data: results || [] })
+})
+
+app.delete('/api/tokens/:id', async (c) => {
+  const userId = c.get('userId') as string
+  const id = c.req.param('id')
+  await c.env.DB.prepare('UPDATE api_tokens SET revoked_at = ? WHERE id = ? AND user_id = ? AND revoked_at IS NULL')
+    .bind(Date.now(), id, userId)
+    .run()
+  return c.json({ success: true })
+})
+
+// ── 记忆 CRUD ──
+
+const memoryCreateSchema = z.object({
+  type: z.enum(['daily', 'fact', 'instruction']),
+  subtype: z.string().max(50).optional(),
+  title: z.string().max(500).optional(),
+  content: z.string().min(1).max(10000),
+  scope: z.enum(['global', 'project']).optional(),
+  project_id: z.string().max(200).optional(),
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  tags: z.array(z.string().max(100)).max(20).optional(),
+})
+
+const memoryUpdateSchema = z.object({
+  title: z.string().max(500).optional(),
+  content: z.string().min(1).max(10000).optional(),
+  tags: z.array(z.string().max(100)).max(20).optional(),
+  project_id: z.string().max(200).optional(),
+})
+
+const searchSchema = z.object({
+  query: z.string().min(1).max(1000),
+  topK: z.number().int().min(1).max(50).optional(),
+  type: z.enum(['daily', 'fact', 'instruction', 'digest']).optional(),
+  project_id: z.string().max(200).optional(),
+  facets: z.record(z.string(), z.string().max(200)).optional(),
+})
+
+const askSchema = z.object({
+  question: z.string().min(1).max(1000),
+  topK: z.number().int().min(1).max(50).optional(),
+  project_id: z.string().max(200).optional(),
+})
+
+function parseListQuery(c: { req: { query: (k: string) => string | undefined } }) {
+  return {
+    type: c.req.query('type') as MemoryType | undefined,
+    subtype: c.req.query('subtype') || undefined,
+    project_id: c.req.query('project_id') || undefined,
+    date: c.req.query('date') || undefined,
+    limit: Math.min(parseInt(c.req.query('limit') || String(DEFAULT_LIMIT)) || DEFAULT_LIMIT, MAX_LIMIT),
+    offset: parseInt(c.req.query('offset') || '0') || 0,
+  }
+}
 
 app.get('/api/memories', async (c) => {
   const userId = c.get('userId') as string
-  const kind = (c.req.query('kind') || 'short') as 'short' | 'long'
-  const limit = Math.min(parseInt(c.req.query('limit') || String(DEFAULT_LIMIT)) || DEFAULT_LIMIT, MAX_LIMIT)
-  const offset = parseInt(c.req.query('offset') || '0') || 0
-  const project_id = c.req.query('project_id') || ''
-  const file_type = c.req.query('file_type') || ''
-  const date = c.req.query('date') || ''
-
-  const results = await listMemories(c.env, userId, { kind, limit, offset, project_id, file_type, date })
+  const results = await listMemories(c.env, userId, parseListQuery(c))
   return c.json({ success: true, data: results })
 })
 
 app.post('/api/memories', async (c) => {
   const userId = c.get('userId') as string
-
-  const contentLength = c.req.header('Content-Length')
-  if (contentLength && parseInt(contentLength) > 10240) {
-    throw new HTTPException(413, { message: 'Payload too large - max 10KB' })
-  }
-
   const body = await c.req.json()
-  const validation = memorySchema.safeParse(body)
-  if (!validation.success) {
-    throw new HTTPException(400, { message: `Invalid input: ${validation.error.issues.map(i => i.message).join(', ')}` })
+  const parsed = memoryCreateSchema.safeParse(body)
+  if (!parsed.success) {
+    throw new HTTPException(400, { message: `Invalid input: ${parsed.error.issues.map((i) => i.message).join(', ')}` })
   }
-
-  const { text, tags, kind, file_type, project_id, date } = validation.data
-  const result = await createMemory(c.env, userId, { text, tags, kind, file_type, project_id, date })
+  const result = await createMemory(c.env, userId, parsed.data, c.executionCtx)
   return c.json({ success: true, data: result })
 })
 
 app.post('/api/memories/search', async (c) => {
   const userId = c.get('userId') as string
-
-  const contentLength = c.req.header('Content-Length')
-  if (contentLength && parseInt(contentLength) > 10240) {
-    throw new HTTPException(413, { message: 'Payload too large - max 10KB' })
-  }
-
   const body = await c.req.json()
-  const validation = semanticSearchSchema.safeParse(body)
-  if (!validation.success) {
-    throw new HTTPException(400, { message: `Invalid input: ${validation.error.issues.map(i => i.message).join(', ')}` })
+  const parsed = searchSchema.safeParse(body)
+  if (!parsed.success) {
+    throw new HTTPException(400, { message: `Invalid input: ${parsed.error.issues.map((i) => i.message).join(', ')}` })
   }
-
-  const { query, topK = 5, kind, file_type, project_id } = validation.data
-  const memories = await searchMemories(c.env, userId, { query, kind, topK, file_type, project_id })
-  return c.json({ success: true, data: memories })
-})
-
-app.post('/api/memories/search/keyword', async (c) => {
-  const userId = c.get('userId') as string
-
-  const contentLength = c.req.header('Content-Length')
-  if (contentLength && parseInt(contentLength) > 10240) {
-    throw new HTTPException(413, { message: 'Payload too large - max 10KB' })
-  }
-
-  const body = await c.req.json()
-  const validation = keywordSearchSchema.safeParse(body)
-  if (!validation.success) {
-    throw new HTTPException(400, { message: `Invalid input: ${validation.error.issues.map(i => i.message).join(', ')}` })
-  }
-
-  const { query, kind, limit = 10 } = validation.data
-  const memories = await searchMemoriesByKeyword(c.env, { query, userId, kind, limit })
-
-  return c.json({ success: true, data: memories })
-})
-
-app.post('/api/ask', async (c) => {
-  const userId = c.get('userId') as string
-
-  const contentLength = c.req.header('Content-Length')
-  if (contentLength && parseInt(contentLength) > 10240) {
-    throw new HTTPException(413, { message: 'Payload too large - max 10KB' })
-  }
-
-  const body = await c.req.json()
-  const validation = askSchema.safeParse(body)
-  if (!validation.success) {
-    throw new HTTPException(400, { message: `Invalid input: ${validation.error.issues.map(i => i.message).join(', ')}` })
-  }
-
-  const { question, kind, topK = 6 } = validation.data
-  const response = await answerQuestion(c.env, runAIWithTimeout, {
-    query: question,
+  const results = await searchMemories(c.env, {
+    query: parsed.data.query,
     userId,
-    kind,
-    topK,
+    topK: parsed.data.topK,
+    type: parsed.data.type,
+    projectId: parsed.data.project_id,
+    facets: parsed.data.facets,
   })
-
-  return c.json({ success: true, data: response })
+  return c.json({ success: true, data: results })
 })
 
-app.post('/api/memories/:id/promote', async (c) => {
+app.get('/api/memories/:id', async (c) => {
   const userId = c.get('userId') as string
-  const id = c.req.param('id')
+  const record = await getMemory(c.env, userId, c.req.param('id'))
+  if (!record) throw new HTTPException(404, { message: 'Not found' })
+  return c.json({ success: true, data: record })
+})
 
-  await promoteMemory(c.env, userId, id)
-
+app.put('/api/memories/:id', async (c) => {
+  const userId = c.get('userId') as string
+  const body = await c.req.json()
+  const parsed = memoryUpdateSchema.safeParse(body)
+  if (!parsed.success) {
+    throw new HTTPException(400, { message: `Invalid input: ${parsed.error.issues.map((i) => i.message).join(', ')}` })
+  }
+  await updateMemory(c.env, userId, c.req.param('id'), parsed.data, c.executionCtx)
   return c.json({ success: true })
 })
 
 app.delete('/api/memories/:id', async (c) => {
   const userId = c.get('userId') as string
-  const id = c.req.param('id')
-
-  await deleteMemory(c.env, userId, id)
-
+  await deleteMemory(c.env, userId, c.req.param('id'))
   return c.json({ success: true })
 })
 
-// ── 结构化记忆 API ──
+// ── 上下文 / 问答 / 统计 ──
 
-// Zod schemas for new endpoints
-const instructionSchema = z.object({
-  type: z.enum(['identity', 'rule', 'workflow']),
-  title: z.string().min(1).max(500),
-  content: z.string().min(1).max(10000),
-  scope: z.enum(['global', 'project', 'user', 'local']).optional(),
-  project_id: z.string().max(200).optional(),
-  path_pattern: z.string().max(500).optional(),
-  priority: z.number().int().min(0).max(100).optional(),
-  tags: z.array(z.string()).optional(),
+app.get('/api/context', async (c) => {
+  const userId = c.get('userId') as string
+  const context = await buildContext(c.env, userId, c.req.query('project_id') || '')
+  return c.json({ success: true, data: { context } })
 })
 
-const learningSchema = z.object({
-  type: z.enum(['preference', 'episodic', 'knowledge']),
-  title: z.string().min(1).max(500),
-  content: z.string().min(1).max(10000),
-  scope: z.enum(['global', 'project', 'user']).optional(),
-  project_id: z.string().max(200).optional(),
-  source: z.enum(['manual', 'extracted', 'imported']).optional(),
-  source_ids: z.array(z.string()).optional(),
-  confidence: z.number().min(0).max(1).optional(),
-  tags: z.array(z.string()).optional(),
-})
-
-const dailySchema = z.object({
-  content: z.string().min(1).max(10000),
-  project_id: z.string().max(200).optional(),
-  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-  tags: z.array(z.string()).optional(),
-})
-
-// Instructions
-app.post('/api/instructions', async (c) => {
+app.post('/api/ask', async (c) => {
   const userId = c.get('userId') as string
   const body = await c.req.json()
-  const validation = instructionSchema.safeParse(body)
-  if (!validation.success) {
-    throw new HTTPException(400, { message: validation.error.issues.map(i => i.message).join(', ') })
+  const parsed = askSchema.safeParse(body)
+  if (!parsed.success) {
+    throw new HTTPException(400, { message: `Invalid input: ${parsed.error.issues.map((i) => i.message).join(', ')}` })
   }
-  const result = await createInstruction(c.env, userId, validation.data)
-  return c.json({ success: true, data: result })
-})
-
-app.get('/api/instructions', async (c) => {
-  const userId = c.get('userId') as string
-  const type = c.req.query('type') as string | undefined
-  const scope = c.req.query('scope') as string | undefined
-  const project_id = c.req.query('project_id') || ''
-  const limit = Math.min(parseInt(c.req.query('limit') || String(DEFAULT_LIMIT)), MAX_LIMIT)
-  const offset = parseInt(c.req.query('offset') || '0') || 0
-
-  const results = await listInstructions(c.env, userId, {
-    type: type as 'identity' | 'rule' | 'workflow' | undefined,
-    scope: scope as 'global' | 'project' | 'user' | 'local' | undefined,
-    project_id,
-    limit,
-    offset,
+  const response = await answerQuestion(c.env, {
+    question: parsed.data.question,
+    userId,
+    projectId: parsed.data.project_id,
+    topK: parsed.data.topK,
   })
-  return c.json({ success: true, data: results })
-})
-
-app.get('/api/instructions/:id', async (c) => {
-  const userId = c.get('userId') as string
-  const id = c.req.param('id')
-  const result = await getInstruction(c.env, userId, id)
-  if (!result) throw new HTTPException(404, { message: 'Not found' })
-  return c.json({ success: true, data: result })
-})
-
-app.delete('/api/instructions/:id', async (c) => {
-  const userId = c.get('userId') as string
-  const id = c.req.param('id')
-  await deleteInstruction(c.env, userId, id)
-  return c.json({ success: true })
-})
-
-// Learnings
-app.post('/api/learnings', async (c) => {
-  const userId = c.get('userId') as string
-  const body = await c.req.json()
-  const validation = learningSchema.safeParse(body)
-  if (!validation.success) {
-    throw new HTTPException(400, { message: validation.error.issues.map(i => i.message).join(', ') })
-  }
-  const result = await createLearning(c.env, userId, validation.data)
-  return c.json({ success: true, data: result })
-})
-
-app.get('/api/learnings', async (c) => {
-  const userId = c.get('userId') as string
-  const type = c.req.query('type') as string | undefined
-  const source = c.req.query('source') as string | undefined
-  const scope = c.req.query('scope') as string | undefined
-  const project_id = c.req.query('project_id') || ''
-  const limit = Math.min(parseInt(c.req.query('limit') || String(DEFAULT_LIMIT)), MAX_LIMIT)
-  const offset = parseInt(c.req.query('offset') || '0') || 0
-
-  const results = await listLearnings(c.env, userId, {
-    type: type as 'preference' | 'episodic' | 'knowledge' | undefined,
-    source: source as 'manual' | 'extracted' | 'imported' | undefined,
-    scope: scope as 'global' | 'project' | 'user' | undefined,
-    project_id,
-    limit,
-    offset,
-  })
-  return c.json({ success: true, data: results })
-})
-
-app.get('/api/learnings/:id', async (c) => {
-  const userId = c.get('userId') as string
-  const id = c.req.param('id')
-  const result = await getLearning(c.env, userId, id)
-  if (!result) throw new HTTPException(404, { message: 'Not found' })
-  return c.json({ success: true, data: result })
-})
-
-app.delete('/api/learnings/:id', async (c) => {
-  const userId = c.get('userId') as string
-  const id = c.req.param('id')
-  await deleteLearning(c.env, userId, id)
-  return c.json({ success: true })
-})
-
-// Dailies
-app.post('/api/dailies', async (c) => {
-  const userId = c.get('userId') as string
-  const body = await c.req.json()
-  const validation = dailySchema.safeParse(body)
-  if (!validation.success) {
-    throw new HTTPException(400, { message: validation.error.issues.map(i => i.message).join(', ') })
-  }
-  const result = await createDaily(c.env, userId, validation.data)
-  return c.json({ success: true, data: result })
-})
-
-app.get('/api/dailies', async (c) => {
-  const userId = c.get('userId') as string
-  const project_id = c.req.query('project_id') || ''
-  const date = c.req.query('date') || ''
-  const limit = Math.min(parseInt(c.req.query('limit') || String(DEFAULT_LIMIT)), MAX_LIMIT)
-  const offset = parseInt(c.req.query('offset') || '0') || 0
-
-  const results = await listDailies(c.env, userId, { project_id, date, limit, offset })
-  return c.json({ success: true, data: results })
-})
-
-app.delete('/api/dailies/:id', async (c) => {
-  const userId = c.get('userId') as string
-  const id = c.req.param('id')
-  await deleteDaily(c.env, userId, id)
-  return c.json({ success: true })
-})
-
-// ── 提取端点 ──
-
-app.post('/api/extract', async (c) => {
-  const userId = c.get('userId') as string
-  const body = await c.req.json().catch(() => ({}))
-  const beforeDate = body.date || new Date().toISOString().slice(0, 10)
-
-  const result = await triggerExtraction(c.env, userId, beforeDate)
-  return c.json({ success: true, data: result })
-})
-
-app.get('/api/extract/status', async (c) => {
-  const userId = c.get('userId') as string
-  const result = await getExtractionStatus(c.env, userId)
-  return c.json({ success: true, data: result })
+  return c.json({ success: true, data: response })
 })
 
 app.get('/api/stats', async (c) => {
   const userId = c.get('userId') as string
-  const projectId = c.req.query('project_id')
-  const stats = await getStatsRaw(c.env, userId, projectId || undefined)
-  return c.json({ success: true, data: stats })
-})
+  const [typeRows, projectRow, undigestedRow] = await Promise.all([
+    c.env.DB.prepare(
+      `SELECT type, COUNT(*) AS count FROM memories WHERE user_id = ? AND archived = 0 GROUP BY type`,
+    )
+      .bind(userId)
+      .all<{ type: MemoryType; count: number }>(),
+    c.env.DB.prepare(
+      `SELECT COUNT(DISTINCT project_id) AS count FROM memories WHERE user_id = ? AND archived = 0 AND project_id != ''`,
+    )
+      .bind(userId)
+      .first<{ count: number }>(),
+    c.env.DB.prepare(
+      `SELECT COUNT(*) AS count FROM memories WHERE user_id = ? AND type = 'daily' AND archived = 0 AND digested_at IS NULL`,
+    )
+      .bind(userId)
+      .first<{ count: number }>(),
+  ])
 
-// 重新索引所有现有记忆到 Vectorize（管理员功能）
-app.get('/api/context', async (c) => {
-  const userId = c.get('userId') as string
-  const projectId = c.req.query('project_id') || ''
-  const context = await buildContext(c.env, userId, projectId)
-  return c.json({ success: true, data: context })
-})
-
-// 重新索引所有现有记忆到 Vectorize（管理员功能）
-app.post('/api/admin/reindex', async (c) => {
-  const userRole = c.get('userRole') as string | undefined
-
-  if (userRole !== 'admin') {
-    throw new HTTPException(403, { message: 'Forbidden: admin role required' })
+  const byType: Record<MemoryType, number> = { daily: 0, fact: 0, instruction: 0, digest: 0 }
+  let total = 0
+  for (const row of typeRows.results || []) {
+    byType[row.type] = row.count
+    total += row.count
   }
-
-  let success = 0
-  let failed = 0
-  let skipped = 0
-  let processed = 0
-  const errors: string[] = []
-
-  if (!c.env.AI || !c.env.VEC) {
-    return c.json({
-      success: true,
-      data: { total: 0, success: 0, failed: 0, skipped: 0, errors: ['AI/VEC not configured'] }
-    })
-  }
-
-  const indexOne = async (label: string, item: IndexableMemory) => {
-    try {
-      await upsertMemoryVector({ env: c.env, runAIWithTimeout, withRetry }, item)
-      success++
-    } catch (error) {
-      failed++
-      const errorMsg = error instanceof Error ? error.message : 'Unknown error'
-      errors.push(`${label} ${item.id}: ${errorMsg}`)
-      console.error(`Failed to index ${label} ${item.id}:`, error)
-    }
-    processed++
-  }
-
-  // 旧 memories 表（short/long）
-  const { results: memories } = await c.env.DB.prepare(
-    'SELECT id, user_id, kind, text, created_at, project_id, file_type, date FROM memories WHERE archived = 0 ORDER BY created_at DESC'
-  ).all<{ id: string; user_id: string; kind: 'short' | 'long'; text: string; created_at: number; project_id: string; file_type: string; date: string | null }>()
-
-  for (const memory of memories || []) {
-    await indexOne('Memory', memory)
-  }
-
-  // 结构化表：learnings
-  const { results: learnings } = await c.env.DB.prepare(
-    'SELECT id, user_id, title, content, scope, project_id, created_at FROM learnings WHERE archived = 0 ORDER BY created_at DESC'
-  ).all<{ id: string; user_id: string; title: string; content: string; scope: string; project_id: string; created_at: number }>()
-
-  for (const l of learnings || []) {
-    await indexOne('Learning', {
-      id: l.id,
-      user_id: l.user_id,
-      kind: 'long',
-      text: `${l.title}\n${l.content}`,
-      created_at: l.created_at,
-      project_id: l.project_id,
-      file_type: l.scope || 'learning',
-      source_table: 'learnings',
-    })
-  }
-
-  // 结构化表：instructions
-  const { results: instructions } = await c.env.DB.prepare(
-    'SELECT id, user_id, title, content, scope, project_id, created_at FROM instructions WHERE archived = 0 ORDER BY created_at DESC'
-  ).all<{ id: string; user_id: string; title: string; content: string; scope: string; project_id: string; created_at: number }>()
-
-  for (const it of instructions || []) {
-    await indexOne('Instruction', {
-      id: it.id,
-      user_id: it.user_id,
-      kind: 'long',
-      text: `${it.title}\n${it.content}`,
-      created_at: it.created_at,
-      project_id: it.project_id,
-      file_type: it.scope || 'instruction',
-      source_table: 'instructions',
-    })
-  }
-
-  // 结构化表：dailies
-  const { results: dailies } = await c.env.DB.prepare(
-    'SELECT id, user_id, content, project_id, date, created_at FROM dailies WHERE archived = 0 ORDER BY created_at DESC'
-  ).all<{ id: string; user_id: string; content: string; project_id: string; date: string; created_at: number }>()
-
-  for (const d of dailies || []) {
-    await indexOne('Daily', {
-      id: d.id,
-      user_id: d.user_id,
-      kind: 'long',
-      text: d.content,
-      created_at: d.created_at,
-      project_id: d.project_id,
-      file_type: d.date || 'daily',
-      source_table: 'dailies',
-    })
-  }
-
   return c.json({
     success: true,
-    data: {
-      total: processed,
-      success,
-      failed,
-      skipped,
-      errors: errors.slice(0, 10)
-    }
+    data: { total, byType, projectCount: projectRow?.count ?? 0, undigestedCount: undigestedRow?.count ?? 0 },
   })
 })
 
-app.get('/health', (c) => c.text('OK'))
+// ── digest / reindex / 数据修复 ──
 
-// ── 导出函数（供测试和路由复用）──
+app.post('/api/digest', async (c) => {
+  const userId = c.get('userId') as string
+  const body = await c.req.json().catch(() => ({}))
+  const beforeDate = body.date || undefined
+  // 手动触发：仅处理该用户（cron 版本会处理全部用户）
+  const result = await runUserDigest(c.env, userId, beforeDate, c.executionCtx)
+  return c.json({ success: true, data: result })
+})
 
-export async function buildContext(env: Env, userId: string, projectId: string): Promise<string> {
-  const queries = [
-    env.DB.prepare(
-      `SELECT title, content, created_at FROM instructions WHERE user_id = ? AND type = 'identity' AND archived = 0 ORDER BY created_at DESC LIMIT 1`
-    ).bind(userId).all<{ title: string; content: string; created_at: number }>(),
+app.get('/api/digest', async (c) => {
+  const status = await getLatestJob(c.env, 'digest')
+  return c.json({ success: true, data: status })
+})
 
-    env.DB.prepare(
-      `SELECT title, content, created_at FROM learnings WHERE user_id = ? AND type = 'preference' AND archived = 0 ORDER BY created_at DESC LIMIT 1`
-    ).bind(userId).all<{ title: string; content: string; created_at: number }>(),
+app.post('/api/reindex', async (c) => {
+  const userId = c.get('userId') as string
+  const result = await reindexAll(c.env, userId, { force: c.req.query('force') === '1' })
+  return c.json({ success: true, data: result })
+})
 
-    env.DB.prepare(
-      `SELECT title, content, created_at FROM learnings WHERE user_id = ? AND type = 'knowledge' AND archived = 0 AND (project_id = ? OR ? = '') ORDER BY created_at DESC LIMIT 10`
-    ).bind(userId, projectId, projectId).all<{ title: string; content: string; created_at: number }>(),
-  ]
-
-  const [identityRows, preferenceRows, knowledgeRows] = await Promise.all(queries)
-
-  const fmt = (title: string, items: { title?: string; content: string; created_at: number }[]): string => {
-    if (!items || items.length === 0) return ''
-    const content = items.map(r => {
-      const date = new Date(r.created_at).toISOString().replace('T', ' ').slice(0, 19)
-      return `<!-- ${date} -->\n${r.content}`
-    }).join('\n\n')
-    return `## ${title}\n\n${content}`
+/** 将旧 JWT sub 下的存量数据归属到当前登录用户（迁移脚本用） */
+app.post('/api/admin/remap-user', async (c) => {
+  const userId = c.get('userId') as string
+  const body = await c.req.json().catch(() => ({}))
+  const oldUserId = String(body.old_user_id || '')
+  if (!oldUserId || oldUserId === userId) {
+    throw new HTTPException(400, { message: 'old_user_id is required and must differ from current user' })
   }
 
-  const sections = [
-    fmt('IDENTITY.md', identityRows.results || []),
-    fmt('USER.md', preferenceRows.results || []),
-    fmt('Project Knowledge', knowledgeRows.results || []),
-  ].filter(Boolean)
+  const tables = ['memories', 'memory_entities', 'api_tokens'] as const
+  const remapped: Record<string, number> = {}
+  for (const table of tables) {
+    const result = await c.env.DB.prepare(`UPDATE ${table} SET user_id = ? WHERE user_id = ?`)
+      .bind(userId, oldUserId)
+      .run()
+    remapped[table] = result.meta?.changes ?? 0
+  }
+  return c.json({ success: true, data: { remapped } })
+})
 
-  return sections.join('\n\n---\n\n')
+// ── MCP Streamable HTTP ──
+
+app.post('/mcp', async (c) => {
+  const userId = c.get('userId') as string
+  let body: { jsonrpc?: string; id?: string | number | null; method?: string }
+  try {
+    body = await c.req.json()
+  } catch {
+    return c.json({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } }, 400)
+  }
+  if (!body.method) {
+    return c.json({ jsonrpc: '2.0', id: body.id ?? null, error: { code: -32600, message: 'Invalid Request' } }, 400)
+  }
+
+  const response = await handleMcpPost(c.env, c.executionCtx, userId, body as Parameters<typeof handleMcpPost>[3])
+  if (response.body === undefined) return c.body(null, 202)
+  return c.json(response.body, 200 as const)
+})
+
+// GET /mcp：不提供 server→client SSE 流
+app.get('/mcp', (c) => c.json({ success: false, error: 'Method not allowed' } satisfies ApiResponse<never>, 405))
+
+// ── 供测试/复用的导出 ──
+
+/** 手动触发指定日期（默认昨天）的 digest，仅处理当前用户 */
+export async function runUserDigest(
+  env: Env,
+  userId: string,
+  beforeDate: string | undefined,
+  ctx?: WaitContext,
+) {
+  const offset = tzOffsetHours(env)
+  const date = beforeDate || userYesterday(offset)
+  const jobId = await startJob(env, 'digest-manual', userId)
+  try {
+    const groups = await env.DB.prepare(
+      `SELECT project_id, COUNT(*) AS cnt FROM memories
+       WHERE user_id = ? AND type = 'daily' AND date = ? AND digested_at IS NULL AND archived = 0
+       GROUP BY project_id`,
+    )
+      .bind(userId, date)
+      .all<{ project_id: string; cnt: number }>()
+
+    let processed = 0
+    for (const group of groups.results || []) {
+      if (await digestOneGroup(env, userId, group.project_id, date, ctx)) processed++
+    }
+    await finishJob(env, jobId, 'completed', { processed, date })
+    return { processed, date }
+  } catch (error) {
+    await finishJob(env, jobId, 'failed', { error: error instanceof Error ? error.message : String(error) })
+    throw error
+  }
 }
 
-export async function getStatsRaw(env: Env, userId: string, projectId?: string): Promise<{
-  instructionCount: number; learningCount: number; dailyCount: number
-}> {
-  const projectFilter = projectId ? ' AND project_id = ?' : ''
-  const bindings = projectId ? [userId, projectId] : [userId]
-
-  const [instRow, learnRow, dailyRow] = await Promise.all([
-    env.DB.prepare(`SELECT COUNT(*) as count FROM instructions WHERE user_id = ? AND archived = 0${projectFilter}`).bind(...bindings).first<{ count: number }>(),
-    env.DB.prepare(`SELECT COUNT(*) as count FROM learnings WHERE user_id = ? AND archived = 0${projectFilter}`).bind(...bindings).first<{ count: number }>(),
-    env.DB.prepare(`SELECT COUNT(*) as count FROM dailies WHERE user_id = ? AND archived = 0${projectFilter}`).bind(...bindings).first<{ count: number }>(),
-  ])
-
-  return {
-    instructionCount: instRow?.count ?? 0,
-    learningCount: learnRow?.count ?? 0,
-    dailyCount: dailyRow?.count ?? 0,
+function readCookie(header: string, name: string): string | null {
+  for (const part of header.split(';')) {
+    const [key, ...rest] = part.trim().split('=')
+    if (key === name) return rest.join('=')
   }
+  return null
 }
 
 export default {
   fetch: app.fetch,
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
-    const cron = event.cron
-    if (cron === CRON_SCHEDULE) {
-      ctx.waitUntil(Promise.all([
-        consolidateMemories(env),
-        cleanupExpiredMemories(env),
-      ]))
+    if (event.cron === CRON_SCHEDULE) {
+      ctx.waitUntil(runDailyDigest(env, ctx))
     }
   },
 }
+
+export type AppEnv = { Bindings: Env; Variables: Variables }
+export { verifyApiToken, verifySession }
