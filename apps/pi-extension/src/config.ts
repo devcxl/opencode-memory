@@ -25,7 +25,7 @@ export function loadPiConfig(): PiMemoryConfig {
 
   if (!apiKey) {
     throw new Error(
-      "[opencode-memory-pi] 需要 API Token。先在 Web 管理台个人中心生成 Token，然后设置 OPM_API_KEY 环境变量（或在 opencode.json 的插件配置里填写 remote.apiKey）。",
+      "[cabbage-memory-pi] 需要 API Token。先在 Web 管理台个人中心生成 Token，然后设置 OPM_API_KEY 环境变量（或在 opencode.json 的插件配置里填写 remote.apiKey）。",
     );
   }
 
@@ -43,9 +43,10 @@ function readOpencodeConfigValue(key: "apiKey" | "apiUrl"): string | undefined {
     if (!Array.isArray(cfg.plugin)) return undefined;
     for (const entry of cfg.plugin) {
       if (
-        Array.isArray(entry) &&
-        entry.length >= 2 &&
-        typeof entry[0] === "string" &&
+        (Array.isArray(entry) &&
+          entry.length >= 2 &&
+          typeof entry[0] === "string" &&
+          entry[0].includes("cabbage-memory")) ||
         entry[0].includes("opencode-memory")
       ) {
         const remote = entry[1]?.remote;

@@ -2,7 +2,7 @@
  * v2 迁移脚本：user_id 归属映射 + 全量重建向量索引。
  *
  * 前置条件：
- * 1. 已执行 `pnpm --filter @devcxl/opencode-memory-api db:migrate`（0010/0011/0012）
+ * 1. 已执行 `pnpm --filter @devcxl/cabbage-memory-api db:migrate`（0010/0011/0012）
  * 2. 已部署新 Worker 并完成一次 GitHub 登录
  * 3. 已在 Web 个人中心生成 API Token
  *

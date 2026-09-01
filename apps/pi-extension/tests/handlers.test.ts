@@ -1,5 +1,5 @@
 import { describe, test, expect, afterEach } from "bun:test";
-import { MemoryClient } from "@devcxl/opencode-memory-shared";
+import { MemoryClient } from "@devcxl/cabbage-memory-shared";
 import {
   handleAdd,
   handleSearch,

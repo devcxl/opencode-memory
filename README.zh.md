@@ -1,10 +1,10 @@
 <div align="center">
 
-# @devcxl/opencode-memory
+# @devcxl/cabbage-memory
 
-[![npm version](https://img.shields.io/npm/v/@devcxl/opencode-memory)](https://www.npmjs.com/package/@devcxl/opencode-memory)
-[![npm downloads](https://img.shields.io/npm/dm/@devcxl/opencode-memory)](https://www.npmjs.com/package/@devcxl/opencode-memory)
-[![license](https://img.shields.io/npm/l/@devcxl/opencode-memory)](./LICENSE)
+[![npm version](https://img.shields.io/npm/v/@devcxl/cabbage-memory)](https://www.npmjs.com/package/@devcxl/cabbage-memory)
+[![npm downloads](https://img.shields.io/npm/dm/@devcxl/cabbage-memory)](https://www.npmjs.com/package/@devcxl/cabbage-memory)
+[![license](https://img.shields.io/npm/l/@devcxl/cabbage-memory)](./LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/devcxl/opencode-memory/ci.yml?branch=main)](https://github.com/devcxl/opencode-memory/actions)
 
 [English](./README.md) | [中文](./README.zh.md)
@@ -28,8 +28,8 @@
 opencode-memory/
 ├── apps/
 │   ├── api/            # Cloudflare Worker：REST + MCP + OAuth + cron
-│   ├── plugin/         # @devcxl/opencode-memory  OpenCode 插件（纯远程模式）
-│   ├── pi-extension/   # @devcxl/opencode-memory-pi  pi coding agent 扩展
+│   ├── plugin/         # @devcxl/cabbage-memory  OpenCode 插件（纯远程模式）
+│   ├── pi-extension/   # @devcxl/cabbage-memory-pi  pi coding agent 扩展
 │   └── web/            # Web 管理台（React，随 Worker 部署）
 ├── packages/shared/    # 共享类型与领域模型
 ├── scripts/            # 迁移与运维脚本
@@ -42,7 +42,7 @@ opencode-memory/
 
    ```bash
    wrangler d1 migrations apply memory-db --remote
-   pnpm --filter @devcxl/opencode-memory-web build
+   pnpm --filter @devcxl/cabbage-memory-web build
    pnpm deploy:api
    ```
 
@@ -69,7 +69,7 @@ opencode-memory/
 ```json
 {
   "plugin": [
-    ["@devcxl/opencode-memory", {
+    ["@devcxl/cabbage-memory", {
       "remote": {
         "apiUrl": "https://<worker-url>",
         "apiKey": "env://OPM_API_KEY"

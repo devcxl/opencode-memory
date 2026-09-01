@@ -1,5 +1,5 @@
 import type { MemoryClient } from "./client.js";
-import type { MemoryType } from "@devcxl/opencode-memory-shared";
+import type { MemoryType } from "@devcxl/cabbage-memory-shared";
 
 /** 工具入参（OpenCode tool.schema 校验后的形状） */
 export interface ToolArgs {

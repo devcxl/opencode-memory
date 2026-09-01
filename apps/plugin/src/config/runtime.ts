@@ -54,9 +54,10 @@ export function getPluginConfigObject(): Record<string, unknown> | undefined {
     if (!Array.isArray(cfg.plugin)) return undefined;
     for (const entry of cfg.plugin) {
       if (
-        Array.isArray(entry) &&
-        entry.length >= 2 &&
-        typeof entry[0] === "string" &&
+        (Array.isArray(entry) &&
+          entry.length >= 2 &&
+          typeof entry[0] === "string" &&
+          entry[0].includes("cabbage-memory")) ||
         entry[0].includes("opencode-memory")
       ) {
         const opts = entry[1];
@@ -79,7 +80,7 @@ export function loadConfig(): MemoryConfig {
 
   if (!apiKey) {
     throw new Error(
-      "[opencode-memory] 远程模式需要 API Token。先在 Web 管理台个人中心生成 Token，然后设置 OPM_API_KEY 环境变量，或在 opencode.json 插件配置里填写 remote.apiKey。",
+      "[cabbage-memory] 远程模式需要 API Token。先在 Web 管理台个人中心生成 Token，然后设置 OPM_API_KEY 环境变量，或在 opencode.json 插件配置里填写 remote.apiKey。",
     );
   }
 

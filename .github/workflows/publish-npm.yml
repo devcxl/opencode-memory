@@ -69,7 +69,7 @@ jobs:
         run: pnpm format:check
 
       - name: Build plugin
-        run: pnpm --filter @devcxl/opencode-memory build
+        run: pnpm --filter @devcxl/cabbage-memory build
 
       - name: Setup Node.js for npm pack
         uses: actions/setup-node@v4

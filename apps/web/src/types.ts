@@ -8,7 +8,7 @@ import type {
   Stats,
   User,
   ApiTokenView,
-} from '@devcxl/opencode-memory-shared'
+} from '@devcxl/cabbage-memory-shared'
 
 export type {
   MemoryRecord,

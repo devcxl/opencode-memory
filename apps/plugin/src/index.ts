@@ -53,7 +53,7 @@ export const MemoryPlugin: Plugin = async (_ctx: PluginInput) => {
       } catch (error) {
         // 上下文获取失败不阻断会话，仅记录
         console.error(
-          "[opencode-memory] context fetch failed:",
+          "[cabbage-memory] context fetch failed:",
           error instanceof Error ? error.message : error,
         );
         return;

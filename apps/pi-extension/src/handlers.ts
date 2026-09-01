@@ -1,5 +1,5 @@
-import type { MemoryClient } from "@devcxl/opencode-memory-shared";
-import type { MemoryType, SearchResult } from "@devcxl/opencode-memory-shared";
+import type { MemoryClient } from "@devcxl/cabbage-memory-shared";
+import type { MemoryType, SearchResult } from "@devcxl/cabbage-memory-shared";
 
 /**
  * memory 工具的执行逻辑（与 OpenCode 插件的 handlers 同一模式）：

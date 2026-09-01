@@ -1,5 +1,5 @@
 {
-  "name": "@devcxl/opencode-memory",
+  "name": "@devcxl/cabbage-memory",
   "version": "2.0.0",
   "description": "Remote memory plugin for OpenCode — backed by a Cloudflare Workers memory service (D1 + Vectorize)",
   "type": "module",
@@ -30,7 +30,7 @@
     "@opencode-ai/plugin": "^1.2.6"
   },
   "devDependencies": {
-    "@devcxl/opencode-memory-shared": "workspace:*",
+    "@devcxl/cabbage-memory-shared": "workspace:*",
     "@types/bun": "^1.3.8",
     "@types/node": "^22.19.11",
     "typescript": "^5.9.3"

@@ -1,5 +1,5 @@
 import { pi } from "@mariozechner/pi-coding-agent";
-import { MemoryClient } from "@devcxl/opencode-memory-shared";
+import { MemoryClient } from "@devcxl/cabbage-memory-shared";
 import { loadPiConfig } from "./config.js";
 import { detectProject } from "./project.js";
 import {
@@ -13,7 +13,7 @@ import {
 } from "./handlers.js";
 
 /**
- * opencode-memory 的 pi 扩展。
+ * cabbage-memory 的 pi 扩展。
  * pi 不支持 MCP（官方设计决策），因此以原生 TypeScript 扩展接入：
  * - registerTool：memory 工具（add/search/get/update/delete/list）
  * - on("before_agent_start")：注入服务端组装的记忆上下文 + 使用说明
@@ -221,7 +221,7 @@ pi.on("before_agent_start", async (event) => {
     context = await client.context(detectedProject || undefined);
   } catch (error) {
     console.error(
-      "[opencode-memory-pi] context fetch failed:",
+      "[cabbage-memory-pi] context fetch failed:",
       error instanceof Error ? error.message : error,
     );
     return;

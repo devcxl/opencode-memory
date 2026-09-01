@@ -47,7 +47,7 @@ jobs:
         run: pnpm format:check
 
       - name: Build plugin
-        run: pnpm --filter @devcxl/opencode-memory build
+        run: pnpm --filter @devcxl/cabbage-memory build
 
       - name: Check npm package contents
         working-directory: apps/plugin

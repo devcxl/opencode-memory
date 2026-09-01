@@ -82,7 +82,7 @@ async function fetchGithubUser(accessToken: string): Promise<GithubUser> {
     headers: {
       Authorization: `Bearer ${accessToken}`,
       Accept: 'application/vnd.github+json',
-      'User-Agent': 'opencode-memory',
+      'User-Agent': 'cabbage-memory',
     },
   })
   if (!res.ok) throw new Error(`GitHub user fetch failed: ${res.status}`)

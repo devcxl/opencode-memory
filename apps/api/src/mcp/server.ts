@@ -12,7 +12,7 @@ import { getLatestJob } from '../services/digest-service'
  * 工具 handler 与 REST 共享 service 层。
  */
 
-const SERVER_INFO = { name: 'opencode-memory', version: '2.0.0' }
+const SERVER_INFO = { name: 'cabbage-memory', version: '2.0.0' }
 const DEFAULT_PROTOCOL_VERSION = '2025-06-18'
 
 // ── JSON-RPC 类型 ──

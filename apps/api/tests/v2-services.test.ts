@@ -51,7 +51,7 @@ test('MCP：initialize 与 tools/list 正常返回', async () => {
   })
   assert.equal(init.status, 200)
   const result = init.body?.result as { serverInfo: { name: string }; capabilities: { tools: object } }
-  assert.equal(result.serverInfo.name, 'opencode-memory')
+  assert.equal(result.serverInfo.name, 'cabbage-memory')
 
   const list = await handleMcpPost(env, undefined, 'u-1', { jsonrpc: '2.0', id: 2, method: 'tools/list' })
   const tools = (list.body?.result as { tools: Array<{ name: string }> }).tools

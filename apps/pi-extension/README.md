@@ -1,4 +1,4 @@
-# @devcxl/opencode-memory-pi
+# @devcxl/cabbage-memory-pi
 
 [pi coding agent](https://pi.dev/) 的原生记忆扩展，接入 [opencode-memory](https://github.com/devcxl/opencode-memory) 远程记忆服务（Cloudflare Workers + D1 + Vectorize）。
 

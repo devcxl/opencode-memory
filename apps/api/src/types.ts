@@ -16,7 +16,7 @@ import type {
   CreateMemoryInput,
   UpdateMemoryInput,
   SearchRequest,
-} from '@devcxl/opencode-memory-shared'
+} from '@devcxl/cabbage-memory-shared'
 
 export type {
   MemoryRecord,
