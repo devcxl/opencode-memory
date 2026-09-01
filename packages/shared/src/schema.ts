@@ -1,128 +1,104 @@
 /**
- * 领域模型 — 与数据库表一一对应
+ * 领域模型 — 与数据库表一一对应（v2 统一 Schema）
  * 这是数据模型的唯一"真相来源"，SQL DDL 和 TS 类型均应与此保持一致。
  */
 
-export interface Memory {
-  /** UUID */
-  id: string
-  /** 用户标识 */
-  user_id: string
-  /** 记忆类型：short（短期，自动过期）| long（长期，持久保留） */
-  kind: 'short' | 'long'
-  /** 记忆内容 */
-  text: string
+export const MEMORY_TYPES = ["daily", "fact", "instruction", "digest"] as const;
+export type MemoryType = (typeof MEMORY_TYPES)[number];
+
+/** instruction 的细分：身份 / 规则 / 工作流 */
+export const INSTRUCTION_SUBTYPES = ["identity", "rule", "workflow"] as const;
+export type InstructionSubtype = (typeof INSTRUCTION_SUBTYPES)[number];
+
+/** fact 的细分：偏好 / 情景 / 知识 */
+export const FACT_SUBTYPES = ["preference", "episodic", "knowledge"] as const;
+export type FactSubtype = (typeof FACT_SUBTYPES)[number];
+
+/** 记忆来源：agent（编码代理写入）| user（人工写入）| digest（定时总结产出）| system（系统） */
+export const MEMORY_SOURCES = ["agent", "user", "digest", "system"] as const;
+export type MemorySource = (typeof MEMORY_SOURCES)[number];
+
+export type MemoryScope = "global" | "project";
+
+/** 统一记忆记录（memories 表的一行） */
+export interface MemoryRecord {
+  id: string;
+  user_id: string;
+  type: MemoryType;
+  /** instruction: identity/rule/workflow；fact: preference/episodic/knowledge；其余为空 */
+  subtype: string;
+  title: string;
+  content: string;
+  /** FTS 分词后文本（服务端内部字段，列表接口不返回） */
+  content_fts?: string;
+  scope: MemoryScope;
+  project_id: string;
+  /** YYYY-MM-DD，daily/digest 有值 */
+  date: string;
   /** JSON 序列化的标签数组 */
-  tags: string
-  /** 来源标识（如 mcp, api） */
-  source?: string
-  /** 创建时间戳（毫秒） */
-  created_at: number
-  /** 过期时间戳（短期记忆，到期后由 cron 清理） */
-  expires_at?: number | null
-  /** 合并时间戳（short→long 提升时记录） */
-  consolidated_at?: number | null
-  /** 是否归档（1=已归档，0=正常） */
-  archived: number
-  /** FTS 分词后的文本，用于全文检索 */
-  text_fts?: string
-  /** 项目标识（owner/repo），为空表示全局记忆 */
-  project_id: string
-  /** 文件类型：memory | identity | user | daily */
-  file_type: string
-  /** 日期（YYYY-MM-DD），用于 daily 日志查询 */
-  date?: string | null
+  tags: string;
+  source: MemorySource;
+  /** JSON 数组：digest → 当天 daily 的 id 列表 */
+  source_ids: string | null;
+  /** JSON 扩展字段（confidence、path_pattern 等） */
+  meta: string;
+  created_at: number;
+  updated_at: number | null;
+  /** daily 被总结的时间（幂等标记） */
+  digested_at: number | null;
+  archived: number;
 }
 
-// ============================================================
-// 结构化记忆类型（0007_migration）
-// ============================================================
-
-export type InstructionType = 'identity' | 'rule' | 'workflow'
-export type LearningType = 'preference' | 'episodic' | 'knowledge'
-export type MemoryScope = 'global' | 'project' | 'user' | 'local'
-export type LearningSource = 'manual' | 'extracted' | 'imported'
-
-export interface Instruction {
-  id: string
-  user_id: string
-  type: InstructionType
-  title: string
-  content: string
-  scope: MemoryScope
-  project_id: string
-  path_pattern?: string | null
-  priority: number
-  tags: string
-  created_at: number
-  updated_at?: number | null
-  archived: number
+/** 记忆分面实体（memory_entities 表） */
+export interface MemoryEntity {
+  key: string;
+  value: string;
 }
 
-export interface Learning {
-  id: string
-  user_id: string
-  type: LearningType
-  title: string
-  content: string
-  content_fts?: string | null
-  scope: MemoryScope
-  project_id: string
-  source: LearningSource
-  source_ids?: string | null
-  confidence: number
-  tags: string
-  recall_count: number
-  last_recalled_at?: number | null
-  created_at: number
-  updated_at?: number | null
-  archived: number
+/** 记忆演化关系（memory_links 表） */
+export const LINK_RELATIONS = [
+  "supersedes",
+  "contradicts",
+  "references",
+  "derived_from",
+] as const;
+export type LinkRelation = (typeof LINK_RELATIONS)[number];
+
+export interface MemoryLink {
+  from_id: string;
+  to_id: string;
+  relation: LinkRelation;
+  created_at: number;
 }
 
-export interface Daily {
-  id: string
-  user_id: string
-  content: string
-  content_fts?: string | null
-  project_id: string
-  date: string
-  extracted: number
-  extracted_at?: number | null
-  tags: string
-  created_at: number
-  archived: number
+/** 用户（GitHub OAuth 登录） */
+export interface User {
+  id: string;
+  github_id: number;
+  login: string;
+  name: string | null;
+  avatar_url: string | null;
+  created_at: number;
+  last_login_at: number | null;
 }
 
-export interface Project {
-  id: string
-  user_id: string
-  name?: string | null
-  instruction_count: number
-  learning_count: number
-  daily_count: number
-  last_active_at?: number | null
-  created_at: number
+/** API Token 的公开视图（不含哈希） */
+export interface ApiTokenView {
+  id: string;
+  name: string;
+  prefix: string;
+  created_at: number;
+  last_used_at: number | null;
+  revoked_at: number | null;
 }
 
-export interface ExtractionLog {
-  id: string
-  user_id: string
-  started_at: number
-  completed_at?: number | null
-  daily_count: number
-  extracted_count: number
-  status: 'running' | 'completed' | 'failed'
-  error?: string | null
-  created_at: number
-}
-
-export interface RateLimit {
-  /** SQLite 自增主键 */
-  id?: number
-  /** 用户标识 */
-  user_id: string
-  /** 限流窗口起始时间（秒级） */
-  window_start: number
-  /** 当前窗口内的请求计数 */
-  count: number
+/** 后台任务执行记录 */
+export interface JobRun {
+  id: string;
+  user_id: string | null;
+  job: string;
+  status: "running" | "completed" | "failed";
+  detail: string | null;
+  started_at: number;
+  completed_at: number | null;
 }
