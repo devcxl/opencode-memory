@@ -4,6 +4,7 @@ import { validateSubtype, createMemory } from '../src/services/memory-service'
 import { runDailyDigest } from '../src/services/digest-service'
 import { handleMcpPost } from '../src/mcp/server'
 import { generateApiToken, hashToken } from '../src/auth/tokens'
+import { isAllowed } from '../src/auth/github'
 import { userYesterday } from '../src/utils/tz'
 import type { Env, MemoryRecord } from '../src/types'
 import { makeRecord, createMockEnv } from './helpers'
@@ -69,6 +70,61 @@ test('MCP：通知请求返回 202，未知方法返回 -32601', async () => {
 
   const unknown = await handleMcpPost(env, undefined, 'u-1', { jsonrpc: '2.0', id: 3, method: 'bogus/method' })
   assert.equal(unknown.body?.error?.code, -32601)
+})
+
+test('MCP：tools/call 正常调用且纯文本不被 JSON 二次转义', async () => {
+  const env = createMockEnv({})
+  const res = await handleMcpPost(env, undefined, 'u-1', {
+    jsonrpc: '2.0',
+    id: 10,
+    method: 'tools/call',
+    params: { name: 'memory_digest_status', arguments: {} },
+  })
+  assert.equal(res.status, 200)
+  const result = res.body?.result as { content: Array<{ type: string; text: string }>; isError: boolean }
+  assert.equal(result.isError, false)
+})
+
+test('OAuth allowlist：未配置时首位认领，已存在用户正常重复登录，拒绝未授权第三方', async () => {
+  const userRows: Array<{ id: string; github_id: number; login: string }> = []
+  const mockDb = {
+    prepare(sql: string) {
+      return {
+        bind(...args: unknown[]) {
+          return {
+            async first<T>() {
+              if (sql.includes('SELECT id FROM users WHERE github_id = ?')) {
+                const target = userRows.find((u) => u.github_id === args[0])
+                return (target ? { id: target.id } : null) as T
+              }
+              return null as T
+            },
+          }
+        },
+        async first<T>() {
+          if (sql.includes('SELECT COUNT(*) AS count FROM users')) {
+            return { count: userRows.length } as T
+          }
+          return null as T
+        },
+      }
+    },
+  }
+  const env = { DB: mockDb, OAUTH_ALLOWLIST: '' } as unknown as Env
+
+  // 1. 数据库为空：首个用户允许认领
+  const firstUser = { id: 101, login: 'alice', name: 'Alice', avatar_url: null }
+  assert.equal(await isAllowed(env, firstUser), true)
+
+  // 写入首个用户
+  userRows.push({ id: 'u-1', github_id: 101, login: 'alice' })
+
+  // 2. 数据库已有用户：已有用户再次登录仍允许
+  assert.equal(await isAllowed(env, firstUser), true)
+
+  // 3. 数据库已有用户：未授权的陌生用户被拦截
+  const intruder = { id: 999, login: 'mallory', name: 'Mallory', avatar_url: null }
+  assert.equal(await isAllowed(env, intruder), false)
 })
 
 // ── digest 幂等占位 ──
@@ -174,17 +230,18 @@ function createDigestEnv(existing: MemoryRecord[]) {
 }
 
 test('digest：成功生成单条事实并标记 daily 已消费', async () => {
+  const testDate = '2026-09-01'
   const daily = makeRecord({
     id: 'd-1',
     type: 'daily',
     subtype: '',
     title: '',
     content: '修复了登录 bug',
-    date: '2026-09-01',
+    date: testDate,
   })
   const { env, rows } = createDigestEnv([daily])
 
-  const result = await runDailyDigest(env)
+  const result = await runDailyDigest(env, undefined, testDate)
   assert.equal(result.processed, 1)
 
   const digest = rows.find((r) => r.type === 'digest')
@@ -195,22 +252,23 @@ test('digest：成功生成单条事实并标记 daily 已消费', async () => {
 })
 
 test('digest：重复执行不会产生第二条 digest（幂等占位）', async () => {
+  const testDate = '2026-09-01'
   const daily = makeRecord({
     id: 'd-1',
     type: 'daily',
     subtype: '',
     title: '',
     content: '修复了登录 bug',
-    date: '2026-09-01',
+    date: testDate,
   })
   const { env, rows } = createDigestEnv([daily])
 
-  await runDailyDigest(env)
+  await runDailyDigest(env, undefined, testDate)
   const countAfterFirst = rows.filter((r) => r.type === 'digest').length
   assert.equal(countAfterFirst, 1)
 
   // daily 已消费 → 第二次运行无待处理数据
-  const result = await runDailyDigest(env)
+  const result = await runDailyDigest(env, undefined, testDate)
   assert.equal(result.processed, 0)
   assert.equal(rows.filter((r) => r.type === 'digest').length, 1)
 })
