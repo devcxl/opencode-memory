@@ -1,0 +1,51 @@
+name: PR Review Gate
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: 自动代码审查 (Pi Agent)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Pi Code Review
+        id: pi_review
+        uses: devcxl/agentic-action@main
+        with:
+          provider: 'half-cabbage'
+          model: 'claude-3-7-sonnet'
+          thinking: 'high'
+          tools: 'read,bash,grep,find,ls,web_search'
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          prompt: |
+            请对 PR #${{ github.event.pull_request.number }} 的代码变更执行深度代码审查。
+
+            执行步骤：
+            1. 运行 `gh pr diff ${{ github.event.pull_request.number }}` 或 `git diff origin/${{ github.base_ref }}...HEAD` 查看本次 PR 的实际变更。
+            2. 结合代码库上下文进行审查，重点排查：
+               - 业务逻辑正确性与边界处理
+               - 安全性（如越权、未授权接口调用、注入、凭据泄露等）
+               - 性能、资源泄露与并发/异步竞态
+               - 架构规范与错误处理（避免静默吞异常）
+               - 单测覆盖与测试有效性
+            3. 输出清晰有条理的 Markdown 评审报告（包含：总体结论、问题清单按严重程度分级说明并指明具体代码位置与修复建议、改进亮点）。
+            4. 审查完成后，使用 `gh pr comment ${{ github.event.pull_request.number }} --body "<审查报告内容>"` 将评审结果发布到该 PR 中。
+        env:
+          HALF_CABBAGE_BASE_URL: ${{ secrets.HALF_CABBAGE_BASE_URL }}
+          HALF_CABBAGE_API_KEY: ${{ secrets.HALF_CABBAGE_API_KEY }}
+          EXA_API_KEY: ${{ secrets.EXA_API_KEY }}
