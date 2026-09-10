@@ -22,9 +22,13 @@ interface DigestSummary {
   entities: Array<{ key: string; value: string }>
 }
 
-export async function runDailyDigest(env: Env, ctx?: WaitContext): Promise<{ processed: number; failed: number }> {
+export async function runDailyDigest(
+  env: Env,
+  ctx?: WaitContext,
+  targetDate?: string,
+): Promise<{ processed: number; failed: number }> {
   const offset = tzOffsetHours(env)
-  const yesterday = userYesterday(offset)
+  const yesterday = targetDate || userYesterday(offset)
   let processed = 0
   let failed = 0
   const jobId = await startJob(env, 'digest')
@@ -84,7 +88,18 @@ export async function digestOneGroup(
   )
     .bind(userId, projectId, date)
     .all<Pick<MemoryRecord, 'id' | 'content'>>()
-  if (!dailies || dailies.length === 0) return false
+  if (!dailies || dailies.length === 0) {
+    // 若此前已有未完成的占位行（content 为空），但当前已无待处理 daily（已被删除或已归档），
+    // 主动归档该无效占位，避免 cron 每天无限次重试此残留占位
+    await env.DB.prepare(
+      `UPDATE memories SET archived = 1
+       WHERE type = 'digest' AND user_id = ? AND project_id = ? AND date = ? AND content = '' AND archived = 0`,
+    )
+      .bind(userId, projectId, date)
+      .run()
+      .catch(() => undefined)
+    return false
+  }
 
   // 2. 幂等占位：唯一索引 (user_id, project_id, date) WHERE type='digest' 兜底
   let placeholderId = (
