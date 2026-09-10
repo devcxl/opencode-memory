@@ -112,10 +112,12 @@ function parseAllowlist(env: Env): string[] {
     .filter(Boolean)
 }
 
-/** allowlist 校验：配置了名单则严格匹配（id 或 login）；未配置则只允许首个注册用户认领 */
+/** allowlist 校验：配置了名单则严格匹配（id 或 login）；未配置则允许首个注册用户认领并允许已存在用户继续登录 */
 async function isAllowed(env: Env, githubUser: GithubUser): Promise<boolean> {
   const allowlist = parseAllowlist(env)
   if (allowlist.length === 0) {
+    const existing = await env.DB.prepare('SELECT id FROM users WHERE github_id = ?').bind(githubUser.id).first()
+    if (existing) return true
     const row = await env.DB.prepare('SELECT COUNT(*) AS count FROM users').first<{ count: number }>()
     return (row?.count ?? 0) === 0
   }
@@ -187,4 +189,4 @@ export async function handleGithubCallback(env: Env, code: string, state: string
   }
 }
 
-export { signState as signOAuthState, OAUTH_STATE_COOKIE as STATE_COOKIE }
+export { signState as signOAuthState, OAUTH_STATE_COOKIE as STATE_COOKIE, isAllowed }
