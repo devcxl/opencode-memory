@@ -244,8 +244,9 @@ async function dispatch(
       const args = (params.arguments || {}) as Record<string, unknown>
       try {
         const data = await tool.handler(env, userId, args, ctx)
+        const text = typeof data === 'string' ? data : JSON.stringify(data, null, 2)
         return {
-          content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
+          content: [{ type: 'text', text }],
           isError: false,
         }
       } catch (error) {
