@@ -20,6 +20,7 @@ interface Args {
   url: string
   token: string
   oldUserId?: string
+  adminSecret?: string
   forceReindex: boolean
 }
 
@@ -32,21 +33,22 @@ function parseArgs(): Args {
   const url = get('url')
   const token = get('token')
   if (!url || !token) {
-    console.error('用法: npx tsx scripts/migrate-v2.ts --url <worker-url> --token <opm_...> [--old-user-id <旧JWT sub>] [--force-reindex]')
+    console.error('用法: npx tsx scripts/migrate-v2.ts --url <worker-url> --token <opm_...> [--old-user-id <旧JWT sub>] [--admin-secret <secret>] [--force-reindex]')
     process.exit(1)
   }
   return {
     url: url.replace(/\/$/, ''),
     token,
     oldUserId: get('old-user-id'),
+    adminSecret: get('admin-secret'),
     forceReindex: argv.includes('--force-reindex'),
   }
 }
 
-async function post<T>(url: string, token: string, path: string, body?: unknown): Promise<T> {
+async function post<T>(url: string, token: string, path: string, body?: unknown, headers?: Record<string, string>): Promise<T> {
   const res = await fetch(`${url}${path}`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...headers },
     body: body ? JSON.stringify(body) : undefined,
   })
   const json = (await res.json()) as { success: boolean; data?: T; error?: string }
@@ -62,22 +64,58 @@ async function main() {
   // 1. user_id 归属映射
   if (args.oldUserId) {
     console.log(`[1/2] remap user_id: ${args.oldUserId} → 当前用户 ...`)
-    const result = await post<{ remapped: Record<string, number> }>(args.url, args.token, '/api/admin/remap-user', {
-      old_user_id: args.oldUserId,
-    })
+    const extraHeaders: Record<string, string> = {}
+    if (args.adminSecret) extraHeaders['X-Admin-Secret'] = args.adminSecret
+    const result = await post<{ remapped: Record<string, number> }>(
+      args.url,
+      args.token,
+      '/api/admin/remap-user',
+      { old_user_id: args.oldUserId },
+      extraHeaders,
+    )
     console.log('  remapped:', JSON.stringify(result.remapped))
   } else {
     console.log('[1/2] 未提供 --old-user-id，跳过 user_id 映射')
   }
 
-  // 2. 全量重建向量索引（含 content_fts 分词由触发器自动维护）
+  // 2. 全量重建向量索引（按批推进，防止 Worker 524 超时）
   console.log(`[2/2] reindex (force=${args.forceReindex}) ...`)
-  const reindexed = await post<{ total: number; indexed: number; skipped: number; failed: number }>(
-    args.url,
-    args.token,
-    `/api/reindex${args.forceReindex ? '?force=1' : ''}`,
-  )
-  console.log(`  total=${reindexed.total} indexed=${reindexed.indexed} skipped=${reindexed.skipped} failed=${reindexed.failed}`)
+  let offset = 0
+  const batchSize = 200
+  let totalIndexed = 0
+  let totalSkipped = 0
+  let totalFailed = 0
+  let round = 1
+
+  for (;;) {
+    const query = new URLSearchParams({
+      limit: String(batchSize),
+      offset: String(offset),
+    })
+    if (args.forceReindex) query.set('force', '1')
+
+    const res = await post<{
+      total: number
+      indexed: number
+      skipped: number
+      failed: number
+      hasMore: boolean
+      nextOffset?: number
+    }>(args.url, args.token, `/api/reindex?${query.toString()}`)
+
+    totalIndexed += res.indexed
+    totalSkipped += res.skipped
+    totalFailed += res.failed
+    console.log(
+      `  [批次 ${round}] 本批=${res.total} indexed=${res.indexed} skipped=${res.skipped} failed=${res.failed} hasMore=${res.hasMore}`,
+    )
+
+    if (!res.hasMore || res.nextOffset === undefined) break
+    offset = res.nextOffset
+    round++
+  }
+
+  console.log(`  reindex 汇总: indexed=${totalIndexed} skipped=${totalSkipped} failed=${totalFailed}`)
 
   console.log('迁移完成。可执行 POST /api/digest 手动验证一次 digest。')
 }

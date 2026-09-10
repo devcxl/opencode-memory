@@ -38,6 +38,7 @@ OAUTH_ALLOWLIST = ""
 #   GITHUB_CLIENT_SECRET GitHub OAuth App
 
 # Staging 环境配置（wrangler deploy --env staging）
+# 注意：严禁与生产共用 D1 database_id 与 Vectorize index_name
 [env.staging]
 name = "cloudflare-memory-staging"
 
@@ -48,18 +49,18 @@ binding = "AI"
 enabled = true
 
 [env.staging.vars]
-ALLOWED_ORIGINS = "*"
+ALLOWED_ORIGINS = "http://localhost:3000,http://127.0.0.1:3000"
 TZ_OFFSET_HOURS = "8"
 OAUTH_ALLOWLIST = ""
 
 [[env.staging.d1_databases]]
 binding = "DB"
-database_name = "memory-db"
-database_id = "eeaf425c-fdfe-4b60-a96f-f3ebbd58a632"
+database_name = "memory-db-staging"
+database_id = "staging-d1-database-id-placeholder"
 
 [[env.staging.vectorize]]
 binding = "VEC"
-index_name = "memory-index"
+index_name = "memory-index-staging"
 
 [env.staging.triggers]
 crons = ["0 20 * * *"]

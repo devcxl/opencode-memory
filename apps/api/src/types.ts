@@ -76,4 +76,6 @@ export interface Env {
   /** 用户时区相对 UTC 的小时偏移（用于"昨天"等本地日期计算），默认 8（东八区） */
   TZ_OFFSET_HOURS?: string
   ALLOWED_ORIGINS?: string
+  /** 管理员操作专用密钥（如旧用户数据迁移 /api/admin/*） */
+  ADMIN_SECRET?: string
 }

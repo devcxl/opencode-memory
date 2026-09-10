@@ -33,20 +33,26 @@ const app = new Hono<{ Bindings: Env; Variables: Variables }>()
 
 // ── 中间件 ──
 
-app.use('*', corsMiddleware({
-  origin: (_origin, c) => {
-    const allowed = (c.env.ALLOWED_ORIGINS || 'http://localhost:3000,http://127.0.0.1:3000')
-      .split(',')
-      .map((o: string) => o.trim())
-    const requestOrigin = c.req.header('Origin')
-    if (allowed.includes('*')) return requestOrigin || '*'
-    if (requestOrigin && allowed.includes(requestOrigin)) return requestOrigin
-    return allowed[0] || '*'
-  },
-  allowHeaders: ['Authorization', 'Content-Type', 'Mcp-Session-Id', 'MCP-Protocol-Version'],
-  allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  credentials: true,
-}))
+app.use('*', async (c, next) => {
+  const allowed = (c.env.ALLOWED_ORIGINS || 'http://localhost:3000,http://127.0.0.1:3000')
+    .split(',')
+    .map((o: string) => o.trim())
+    .filter(Boolean)
+  const isWildcard = allowed.includes('*')
+  const requestOrigin = c.req.header('Origin') || ''
+  const isExplicitAllowed = Boolean(requestOrigin && allowed.includes(requestOrigin))
+
+  return corsMiddleware({
+    origin: () => {
+      if (isExplicitAllowed) return requestOrigin
+      if (isWildcard) return '*'
+      return null
+    },
+    allowHeaders: ['Authorization', 'Content-Type', 'Mcp-Session-Id', 'MCP-Protocol-Version', 'X-Admin-Secret'],
+    allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    credentials: isExplicitAllowed,
+  })(c, next)
+})
 
 app.use('*', async (c, next) => {
   const start = Date.now()
@@ -357,12 +363,26 @@ app.get('/api/digest', async (c) => {
 
 app.post('/api/reindex', async (c) => {
   const userId = c.get('userId') as string
-  const result = await reindexAll(c.env, userId, { force: c.req.query('force') === '1' })
+  const limitParam = c.req.query('limit')
+  const offsetParam = c.req.query('offset')
+  const limit = limitParam ? parseInt(limitParam) : undefined
+  const offset = offsetParam ? parseInt(offsetParam) : undefined
+  const result = await reindexAll(c.env, userId, {
+    force: c.req.query('force') === '1',
+    limit: limit && !isNaN(limit) ? limit : undefined,
+    offset: offset && !isNaN(offset) ? offset : undefined,
+  })
   return c.json({ success: true, data: result })
 })
 
-/** 将旧 JWT sub 下的存量数据归属到当前登录用户（迁移脚本用） */
+/** 将旧 JWT sub 下的存量数据归属到当前登录用户（迁移脚本用，需 ADMIN_SECRET 鉴权） */
 app.post('/api/admin/remap-user', async (c) => {
+  const adminSecret = c.env.ADMIN_SECRET
+  const providedSecret = c.req.header('X-Admin-Secret')
+  if (!adminSecret || providedSecret !== adminSecret) {
+    throw new HTTPException(403, { message: 'Admin secret required for remap operation' })
+  }
+
   const userId = c.get('userId') as string
   const body = await c.req.json().catch(() => ({}))
   const oldUserId = String(body.old_user_id || '')

@@ -113,27 +113,48 @@ export function toIndexable(row: MemoryRecord): IndexableMemory {
 }
 
 /**
- * 全量重建向量索引（/api/reindex 与迁移脚本共用）。
- * 跳过 model 已是当前版本的记录，实现模型换版后的增量重建。
+ * 全量/分批重建向量索引（/api/reindex 与迁移脚本共用）。
+ * 跳过 model 已是当前版本的记录，实现模型换版后的增量重建；
+ * 支持 limit 与 offset 分批处理，防止数据量大时单个 Worker 请求超时。
  */
-export async function reindexAll(env: Env, userId: string, opts: { force?: boolean } = {}): Promise<{
+export async function reindexAll(
+  env: Env,
+  userId: string,
+  opts: { force?: boolean; limit?: number; offset?: number } = {},
+): Promise<{
   total: number
   indexed: number
   skipped: number
   failed: number
+  hasMore: boolean
+  nextOffset?: number
 }> {
   let total = 0
   let indexed = 0
   let skipped = 0
   let failed = 0
 
-  let offset = 0
-  const pageSize = 100
+  let currentOffset = opts.offset ?? 0
+  const maxLimit = opts.limit
+  const pageSize = maxLimit ? Math.min(maxLimit, 100) : 100
+  let hasMore = false
+
   for (;;) {
+    const fetchLimit = maxLimit ? Math.min(pageSize, maxLimit - total) : pageSize
+    if (fetchLimit <= 0) {
+      const checkNext = await env.DB.prepare(
+        'SELECT 1 FROM memories WHERE user_id = ? AND archived = 0 ORDER BY created_at ASC LIMIT 1 OFFSET ?',
+      )
+        .bind(userId, currentOffset)
+        .first()
+      hasMore = Boolean(checkNext)
+      break
+    }
+
     const { results } = await env.DB.prepare(
       'SELECT * FROM memories WHERE user_id = ? AND archived = 0 ORDER BY created_at ASC LIMIT ? OFFSET ?',
     )
-      .bind(userId, pageSize, offset)
+      .bind(userId, fetchLimit, currentOffset)
       .all<MemoryRecord>()
 
     const rows = results || []
@@ -169,9 +190,9 @@ export async function reindexAll(env: Env, userId: string, opts: { force?: boole
       console.error('[reindex] batch failed:', error instanceof Error ? error.message : error)
     }
     total += rows.length
-    if (rows.length < pageSize) break
-    offset += pageSize
+    currentOffset += rows.length
+    if (rows.length < fetchLimit) break
   }
 
-  return { total, indexed, skipped, failed }
+  return { total, indexed, skipped, failed, hasMore, nextOffset: hasMore ? currentOffset : undefined }
 }
