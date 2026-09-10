@@ -88,13 +88,19 @@ export async function searchMemories(env: Env, opts: SearchOptions): Promise<Sea
     }
   }
 
+  // 先按分面硬过滤（在截断前执行，防止有效候选被挤出 topK）
+  let eligibleCandidates = candidates
+  if (allowedIds) {
+    eligibleCandidates = candidates.filter((c) => allowedIds.has(c.id))
+  }
+
   // 排序：桶 A 整体在前，桶内按 RRF 分数
-  candidates.sort((a, b) => {
+  eligibleCandidates.sort((a, b) => {
     if (a.bucket !== b.bucket) return a.bucket === 'full-match' ? -1 : 1
     if (b.score !== a.score) return b.score - a.score
     return 0
   })
-  const topCandidates = candidates.slice(0, topK)
+  const topCandidates = eligibleCandidates.slice(0, topK)
 
   const records = await hydrate(env, userId, topCandidates.map((c) => c.id))
   const recordMap = new Map(records.map((r) => [r.id, r]))
@@ -103,7 +109,6 @@ export async function searchMemories(env: Env, opts: SearchOptions): Promise<Sea
   for (const c of topCandidates) {
     const record = recordMap.get(c.id)
     if (!record) continue
-    if (allowedIds && !allowedIds.has(c.id)) continue
     results.push(toSearchResult(record, c))
   }
   return results
