@@ -13,7 +13,7 @@ jobs:
   review:
     name: 自动代码审查 (Pi Agent)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     permissions:
       contents: read
       pull-requests: write
@@ -25,7 +25,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Extract Core PR Diff on Runner
+      - name: Extract PR Overview on Runner
         id: prep
         run: |
           mkdir -p /tmp/pr-diff
@@ -37,13 +37,10 @@ jobs:
             -- . ':!pnpm-lock.yaml' ':!*.lock.yml' ':!dist' \
             > /tmp/pr-diff/stat.txt
 
-          # 2. 提取核心模块的新增与修改 diff（排除已删除文件与锁文件）
-          git --no-pager diff "$BASE_REF..HEAD" --diff-filter=d \
-            -- apps/api/src apps/plugin/src apps/pi-extension/src packages/shared/src scripts \
-            ':!*.lock.yml' ':!pnpm-lock.yaml' \
-            > /tmp/pr-diff/core-changes.patch
+          # 2. 生成提交历史清单
+          git --no-pager log "$BASE_REF..HEAD" --oneline > /tmp/pr-diff/commits.txt
 
-          echo "Diff extracted successfully. Stat lines: $(wc -l < /tmp/pr-diff/stat.txt), Core diff lines: $(wc -l < /tmp/pr-diff/core-changes.patch)"
+          echo "Extracted PR overview: stat lines=$(wc -l < /tmp/pr-diff/stat.txt), commits=$(wc -l < /tmp/pr-diff/commits.txt)"
 
       - name: Run Pi Code Review
         id: pi_review
@@ -54,21 +51,21 @@ jobs:
           thinking: 'high'
           tools: 'read,grep,find,ls'
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          context_files: '/tmp/pr-diff/stat.txt /tmp/pr-diff/core-changes.patch'
+          context_files: '/tmp/pr-diff/stat.txt /tmp/pr-diff/commits.txt'
           prompt: |
-            请基于提供的变更统计（@/tmp/pr-diff/stat.txt）和核心代码变动（@/tmp/pr-diff/core-changes.patch），结合本地代码库进行深度代码审查。
+            请基于提供的变更统计（@/tmp/pr-diff/stat.txt）和提交历史（@/tmp/pr-diff/commits.txt），结合本地已检出的完整代码库进行深度代码审查。
 
             审查要求：
-            1. 重点排查：
+            1. 请使用 read 工具针对核心代码改动（如 apps/api/src/auth/、apps/api/src/services/、apps/api/src/search/hybrid.ts、apps/plugin/src/）按需查阅其实际源码实现。
+            2. 重点排查：
                - 业务逻辑正确性与边界处理（空值、异常分支、生命周期）
                - 安全性（越权访问、鉴权绕过、SQL/FTS注入、敏感配置泄露、CORS凭据安全）
                - 并发与性能（异步竞态、超时、死循环重试风险）
                - 架构规范与类型契约完整性
-            2. 若某个改动需要查看更完整的上下文，请使用 read 工具查阅本地工作区对应文件。
             3. 输出专业、有条理的 Markdown 格式审查报告，必须包含：
                - 总体结论（可合并 / 需修改 / 阻断性风险）
+               - 核心架构与重构亮点说明
                - 问题清单（按严重程度 Critical / High / Medium 分级，指明具体文件、代码行与整改方案）
-               - 重构亮点或良好实践
         env:
           HALF_CABBAGE_BASE_URL: ${{ secrets.HALF_CABBAGE_BASE_URL }}
           HALF_CABBAGE_API_KEY: ${{ secrets.HALF_CABBAGE_API_KEY }}
