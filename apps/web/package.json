@@ -1,5 +1,5 @@
 {
-  "name": "@devcxl/opencode-memory-web",
+  "name": "@devcxl/cabbage-memory-web",
   "private": true,
   "version": "1.0.0",
   "type": "module",
@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@devcxl/opencode-memory-shared": "workspace:*",
+    "@devcxl/cabbage-memory-shared": "workspace:*",
     "@tanstack/react-query": "^5.59.0",
     "axios": "^1.13.6",
     "class-variance-authority": "^0.7.0",

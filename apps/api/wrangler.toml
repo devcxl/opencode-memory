@@ -5,7 +5,7 @@ main = "src/index.ts"
 [assets]
 directory = "../../apps/web/dist"
 not_found_handling = "single-page-application"
-run_worker_first = ["/api/*", "/health"]
+run_worker_first = ["/api/*", "/mcp", "/auth/*", "/health"]
 
 [ai]
 binding = "AI"
@@ -19,17 +19,26 @@ database_id = "eeaf425c-fdfe-4b60-a96f-f3ebbd58a632"
 binding = "VEC"
 index_name = "memory-index"
 
+# 每日 digest：北京时间 04:00 = UTC 20:00（wrangler cron 按 UTC 触发）
 [triggers]
-crons = ["0 4 * * *"]
+crons = ["0 20 * * *"]
 
 [observability]
 enabled = true
 
 [vars]
 ALLOWED_ORIGINS = "http://localhost:3000,http://127.0.0.1:3000"
-RATE_LIMIT = "100"
+# 用户时区偏移（小时），用于"昨天"等本地日期边界计算
+TZ_OFFSET_HOURS = "8"
+# 允许登录的 GitHub 账号（数字 id 或 login，逗号分隔）；留空则仅首个登录者可认领实例
+OAUTH_ALLOWLIST = ""
+# Secrets（wrangler secret put）：
+#   JWT_SECRET           会话/状态 JWT 签名密钥
+#   GITHUB_CLIENT_ID     GitHub OAuth App
+#   GITHUB_CLIENT_SECRET GitHub OAuth App
 
 # Staging 环境配置（wrangler deploy --env staging）
+# 注意：严禁与生产共用 D1 database_id 与 Vectorize index_name
 [env.staging]
 name = "cloudflare-memory-staging"
 
@@ -40,17 +49,18 @@ binding = "AI"
 enabled = true
 
 [env.staging.vars]
-ALLOWED_ORIGINS = "*"
-RATE_LIMIT = "100"
+ALLOWED_ORIGINS = "http://localhost:3000,http://127.0.0.1:3000"
+TZ_OFFSET_HOURS = "8"
+OAUTH_ALLOWLIST = ""
 
 [[env.staging.d1_databases]]
 binding = "DB"
-database_name = "memory-db"
-database_id = "eeaf425c-fdfe-4b60-a96f-f3ebbd58a632"
+database_name = "memory-db-staging"
+database_id = "staging-d1-database-id-placeholder"
 
 [[env.staging.vectorize]]
 binding = "VEC"
-index_name = "memory-index"
+index_name = "memory-index-staging"
 
 [env.staging.triggers]
-crons = ["0 4 * * *"]
+crons = ["0 20 * * *"]

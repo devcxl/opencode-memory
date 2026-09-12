@@ -1,54 +1,95 @@
-import type { Memory } from './schema'
+import type { MemoryType } from "./schema";
 
-export interface KeywordSearchResult extends Memory {
-  /** 匹配上下文片段 */
-  snippet: string
-  /** 匹配的 token/关键词数量 */
-  matchCount: number
-  /** RRF 融合后的综合评分 */
-  score: number
-}
-
-export interface RagCitation {
-  /** 来源记忆 ID */
-  memoryId: string
-  /** 引用文本片段 */
-  text: string
-  /** 记忆创建时间 */
-  createdAt: number
-  /** 记忆类型 */
-  kind: 'short' | 'long'
-  /** 语义相关性评分 */
-  score: number
-  /** 来源类型：learning | instruction | daily | memory */
-  source?: 'learning' | 'instruction' | 'daily' | 'memory'
-}
-
-export interface AskResponse {
-  /** AI 生成的回答 */
-  answer: string
-  /** 回答引用的记忆来源 */
-  citations: RagCitation[]
-}
-
+/** Worker API 统一响应格式 */
 export interface ApiResponse<T> {
-  /** 请求是否成功 */
-  success: boolean
-  /** 响应数据（成功时存在） */
-  data?: T
-  /** 错误信息（失败时存在） */
-  error?: string
+  success: boolean;
+  data?: T;
+  error?: string;
+}
+
+/** 搜索结果（两桶分层 + RRF 融合后） */
+export interface SearchResult {
+  id: string;
+  type: MemoryType;
+  subtype: string;
+  title: string;
+  content: string;
+  tags: string;
+  project_id: string;
+  date: string;
+  created_at: number;
+  /** 归属桶：full-match（FTS 全命中，确定性优先）| fused（其余候选） */
+  bucket: "full-match" | "fused";
+  /** RRF 融合评分 */
+  score: number;
+  /** FTS 命中的上下文片段（仅 FTS 命中记录有值） */
+  snippet: string;
+}
+
+/** RAG 引用 */
+export interface RagCitation {
+  memoryId: string;
+  text: string;
+  createdAt: number;
+  type: MemoryType;
+  score: number;
+}
+
+/** /api/ask 响应 */
+export interface AskResponse {
+  answer: string;
+  citations: RagCitation[];
+}
+
+/** /api/context 响应：组装好的上下文 Markdown（供插件注入 system prompt） */
+export interface ContextResponse {
+  context: string;
 }
 
 export interface Stats {
-  /** 短期记忆数量 */
-  shortCount: number
-  /** 长期记忆数量 */
-  longCount: number
-  /** 结构化记忆：指令数量 */
-  instructionCount: number
-  /** 结构化记忆：学习数量 */
-  learningCount: number
-  /** 结构化记忆：每日日志数量 */
-  dailyCount: number
+  total: number;
+  byType: Record<MemoryType, number>;
+  projectCount: number;
+  /** 待 digest 的 daily 数（未消费） */
+  undigestedCount: number;
+}
+
+/** POST /api/memories 请求体 */
+export interface CreateMemoryInput {
+  type: MemoryType;
+  subtype?: string;
+  title?: string;
+  content: string;
+  scope?: "global" | "project";
+  project_id?: string;
+  date?: string;
+  tags?: string[];
+}
+
+/** PUT /api/memories/:id 请求体 */
+export interface UpdateMemoryInput {
+  title?: string;
+  content?: string;
+  tags?: string[];
+  project_id?: string;
+}
+
+/** GET /api/memories 查询参数 */
+export interface ListMemoriesQuery {
+  type?: MemoryType;
+  subtype?: string;
+  project_id?: string;
+  date?: string;
+  limit?: number;
+  offset?: number;
+}
+
+/** POST /api/memories/search 请求体 */
+export interface SearchRequest {
+  query: string;
+  topK?: number;
+  type?: MemoryType;
+  project_id?: string;
+  /** 分面硬过滤，如 { region: '华北' }（可选，第二阶段查询解析产出） */
+  facets?: Record<string, string>;
 }

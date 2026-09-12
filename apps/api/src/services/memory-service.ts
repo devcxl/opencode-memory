@@ -1,139 +1,348 @@
-import { deleteMemoryIndex, replaceMemoryIndex, upsertMemoryVector, type IndexableMemory } from '../search/indexing'
-import { crossTableSearch } from '../search/cross-table'
+import type { Env, MemoryRecord, MemoryType, WaitContext } from '../types'
+import type { CreateMemoryInput, UpdateMemoryInput } from '../types'
+import { DEFAULT_LIMIT, MAX_LIMIT, LLM_MODEL } from '../types'
 import { segmentForIndex } from '../search/tokenizer'
+import { indexMemory, deleteMemoryIndex, toIndexable } from '../search/indexing'
 import { runAIWithTimeout } from '../utils/ai'
 import { withRetry } from '../utils/retry'
-import type { Env, KeywordSearchResult, Memory } from '../types'
-import { SHORT_TERM_EXPIRY_MS } from '../types'
+import { fetchVectorCandidates } from '../search/hybrid'
+import { userLocalDate, tzOffsetHours } from '../utils/tz'
 
-export interface CreateMemoryOptions {
-  text: string
-  tags?: string[]
-  kind?: 'short' | 'long'
-  project_id?: string
-  file_type?: string
-  date?: string
+// ── subtype 校验 ──
+
+const INSTRUCTION_SUBTYPES = ['identity', 'rule', 'workflow']
+const FACT_SUBTYPES = ['preference', 'episodic', 'knowledge']
+
+export function validateSubtype(type: MemoryType, subtype: string): string {
+  if (!subtype) return ''
+  if (type === 'instruction' && INSTRUCTION_SUBTYPES.includes(subtype)) return subtype
+  if (type === 'fact' && FACT_SUBTYPES.includes(subtype)) return subtype
+  throw new Error(`Invalid subtype "${subtype}" for type "${type}"`)
 }
 
-export interface ListMemoriesOptions {
-  kind?: 'short' | 'long'
-  limit?: number
-  offset?: number
-  project_id?: string
-  file_type?: string
-  date?: string
-}
-
-export interface SearchMemoriesOptions {
-  query: string
-  kind?: 'short' | 'long'
-  topK?: number
-  file_type?: string
-  project_id?: string
-}
-
-export interface CreateMemoryResult {
+export interface CreateResult {
   id: string
-  indexed: boolean
 }
 
+/**
+ * 创建记忆。同步路径只有 D1 插入（~5ms）；
+ * 向量索引与 fact 理解性后处理均通过 waitUntil 异步执行。
+ */
 export async function createMemory(
   env: Env,
   userId: string,
-  options: CreateMemoryOptions
-): Promise<CreateMemoryResult> {
-  const { text, tags, kind = 'short', project_id = '', file_type = 'memory', date = '' } = options
+  input: CreateMemoryInput,
+  executionCtx?: WaitContext,
+): Promise<CreateResult> {
   const id = crypto.randomUUID()
   const now = Date.now()
-  const expiresAt = kind === 'short' ? now + SHORT_TERM_EXPIRY_MS : null
-  const textFts = segmentForIndex(text)
+  const subtype = validateSubtype(input.type, input.subtype || '')
+  const scope = input.scope || (input.project_id ? 'project' : 'global')
+  const date = input.date || (input.type === 'daily' || input.type === 'digest'
+    ? userLocalDate(now, tzOffsetHours(env))
+    : '')
 
   await env.DB.prepare(
-    'INSERT INTO memories (id, user_id, kind, text, text_fts, tags, created_at, expires_at, project_id, file_type, date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-  ).bind(id, userId, kind, text, textFts, JSON.stringify(tags || []), now, expiresAt, project_id, file_type, date).run()
-
-  let indexed = true
-  try {
-    await upsertMemoryVector(
-      { env, runAIWithTimeout, withRetry },
-      { id, user_id: userId, kind, text, created_at: now, project_id, file_type, date }
+    `INSERT INTO memories (id, user_id, type, subtype, title, content, content_fts, scope, project_id, date, tags, source, meta, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  )
+    .bind(
+      id,
+      userId,
+      input.type,
+      subtype,
+      input.title || '',
+      input.content,
+      segmentForIndex(`${input.title || ''} ${input.content}`),
+      scope,
+      input.project_id || '',
+      date,
+      JSON.stringify(input.tags || []),
+      input.type === 'digest' ? 'digest' : 'agent',
+      '{}',
+      now,
     )
-  } catch {
-    indexed = false
-  }
+    .run()
 
-  return { id, indexed }
+  const asyncWork: Promise<unknown>[] = [
+    indexMemory(
+      { env, runAIWithTimeout, withRetry },
+      {
+        id,
+        user_id: userId,
+        type: input.type,
+        subtype,
+        title: input.title || '',
+        content: input.content,
+        project_id: input.project_id || '',
+        date,
+        created_at: now,
+      },
+    ),
+  ]
+  if (input.type === 'fact' && env.AI) {
+    asyncWork.push(postProcessFact(env, userId, id, input.content).catch((e) => {
+      console.error('[fact-postprocess] failed:', e instanceof Error ? e.message : e)
+    }))
+  }
+  if (executionCtx) executionCtx.waitUntil(Promise.all(asyncWork))
+
+  return { id }
 }
 
-export async function listMemories(
-  env: Env,
-  userId: string,
-  options: ListMemoriesOptions
-): Promise<Memory[]> {
-  const { kind = 'short', limit = 50, offset = 0, project_id = '', file_type = '', date = '' } = options
+export interface ListOptions {
+  type?: MemoryType
+  subtype?: string
+  project_id?: string
+  date?: string
+  limit?: number
+  offset?: number
+}
 
-  let sql = 'SELECT * FROM memories WHERE user_id = ? AND kind = ? AND archived = 0'
-  const bindings: unknown[] = [userId, kind]
+export async function listMemories(env: Env, userId: string, opts: ListOptions = {}): Promise<MemoryRecord[]> {
+  const { type, subtype, project_id, date, limit = DEFAULT_LIMIT, offset = 0 } = opts
 
-  if (project_id) {
-    sql += ' AND (project_id = ? OR ? = \'\')'
-    bindings.push(project_id, project_id)
+  const conditions: string[] = ['user_id = ?', 'archived = 0']
+  const bindings: unknown[] = [userId]
+  if (type) {
+    conditions.push('type = ?')
+    bindings.push(type)
   }
-  if (file_type) {
-    sql += ' AND (file_type = ? OR ? = \'\')'
-    bindings.push(file_type, file_type)
+  if (subtype) {
+    conditions.push('subtype = ?')
+    bindings.push(subtype)
+  }
+  if (project_id) {
+    conditions.push('project_id = ?')
+    bindings.push(project_id)
   }
   if (date) {
-    sql += ' AND (date = ? OR ? = \'\')'
-    bindings.push(date, date)
+    conditions.push('date = ?')
+    bindings.push(date)
   }
 
-  sql += ' ORDER BY created_at DESC LIMIT ? OFFSET ?'
-  bindings.push(limit, offset)
-
-  const { results } = await env.DB.prepare(sql).bind(...bindings).all<Memory>()
+  bindings.push(Math.min(limit, MAX_LIMIT), offset)
+  const { results } = await env.DB.prepare(
+    `SELECT id, user_id, type, subtype, title, content, scope, project_id, date, tags, source, source_ids, meta,
+            created_at, updated_at, digested_at, archived
+     FROM memories WHERE ${conditions.join(' AND ')}
+     ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+  )
+    .bind(...bindings)
+    .all<MemoryRecord>()
   return results || []
 }
 
-export async function searchMemories(
-  env: Env,
-  userId: string,
-  options: SearchMemoriesOptions
-): Promise<KeywordSearchResult[]> {
-  const { query, topK = 5, kind, file_type, project_id } = options
-  return crossTableSearch(env, runAIWithTimeout, {
-    query,
-    userId,
-    kind,
-    topK,
-    file_type,
-    project_id,
-  })
+export async function getMemory(env: Env, userId: string, id: string): Promise<MemoryRecord | null> {
+  const row = await env.DB.prepare(
+    `SELECT id, user_id, type, subtype, title, content, scope, project_id, date, tags, source, source_ids, meta,
+            created_at, updated_at, digested_at, archived
+     FROM memories WHERE id = ? AND user_id = ? AND archived = 0`,
+  )
+    .bind(id, userId)
+    .first<MemoryRecord>()
+  return row ?? null
 }
 
-export async function promoteMemory(
+export async function updateMemory(
   env: Env,
   userId: string,
-  id: string
+  id: string,
+  input: UpdateMemoryInput,
+  executionCtx?: WaitContext,
 ): Promise<void> {
+  const existing = await getMemory(env, userId, id)
+  if (!existing) throw new Error('Memory not found')
+
+  const title = input.title ?? existing.title
+  const content = input.content ?? existing.content
+  const tags = input.tags ? JSON.stringify(input.tags) : existing.tags
+  const projectId = input.project_id ?? existing.project_id
+
   await env.DB.prepare(
-    'UPDATE memories SET kind = ?, expires_at = NULL WHERE id = ? AND user_id = ?'
-  ).bind('long', id, userId).run()
+    `UPDATE memories SET title = ?, content = ?, content_fts = ?, tags = ?, project_id = ?, scope = ?, updated_at = ? WHERE id = ? AND user_id = ?`,
+  )
+    .bind(
+      title,
+      content,
+      segmentForIndex(`${title} ${content}`),
+      tags,
+      projectId,
+      projectId ? 'project' : 'global',
+      Date.now(),
+      id,
+      userId,
+    )
+    .run()
 
-  const memory = await env.DB.prepare(
-    'SELECT id, user_id, kind, text, created_at, project_id, file_type, date FROM memories WHERE id = ? AND user_id = ?'
-  ).bind(id, userId).first<IndexableMemory>()
-
-  if (memory) {
-    await replaceMemoryIndex({ env, runAIWithTimeout, withRetry }, memory)
+  if (executionCtx) {
+    executionCtx.waitUntil(
+      indexMemory({ env, runAIWithTimeout, withRetry }, {
+        id,
+        user_id: userId,
+        type: existing.type,
+        subtype: existing.subtype,
+        title,
+        content,
+        project_id: projectId,
+        date: existing.date,
+        created_at: existing.created_at,
+      }),
+    )
   }
 }
 
-export async function deleteMemory(
+/** 删除（硬删）：同时清理向量索引、实体、关系链 */
+export async function deleteMemory(env: Env, userId: string, id: string): Promise<void> {
+  const result = await env.DB.prepare('DELETE FROM memories WHERE id = ? AND user_id = ?')
+    .bind(id, userId)
+    .run()
+  if ((result.meta?.changes ?? 0) === 0) throw new Error('Memory not found')
+
+  await env.DB.prepare('DELETE FROM memory_entities WHERE memory_id = ?').bind(id).run()
+  await env.DB.prepare('DELETE FROM memory_links WHERE from_id = ? OR to_id = ?').bind(id, id).run()
+  await deleteMemoryIndex(env, id)
+}
+
+// ── fact 写入后处理：实体抽取 + 查重 + 新陈代谢（一次 LLM 调用） ──
+
+interface FactPostProcessResult {
+  duplicate_of?: string | null
+  supersedes?: string[]
+  contradicts?: string[]
+  entities?: Array<{ key: string; value: string }>
+}
+
+export async function postProcessFact(env: Env, userId: string, id: string, content: string): Promise<void> {
+  // 向量预召回相关旧事实，给 LLM 做矛盾/重复判断的上下文
+  const related = await fetchVectorCandidates(env, { query: content, userId, type: 'fact', topK: 5 })
+  const relatedContext = related
+    .filter((r) => r.id !== id)
+    .map((r) => `{"id": "${r.id}", "content": ${JSON.stringify(r.content.slice(0, 300))}}`)
+    .join(',\n')
+
+  const response = await runAIWithTimeout(env.AI, LLM_MODEL, {
+    messages: [
+      {
+        role: 'system',
+        content: `你负责维护记忆库的一致性。对比新事实与近期旧事实，输出 JSON（不要额外文字）：
+{
+  "duplicate_of": "与旧事实语义重复时填该旧事实 id，否则为 null",
+  "supersedes": ["因新事实而失效（被推翻/更新）的旧事实 id"],
+  "contradicts": ["与新事实矛盾但不确定是否推翻的旧事实 id"],
+  "entities": [{"key": "region|tech|person|version|topic", "value": "具体值"}]
+}
+规则：
+- entities 抽取新事实中区分度高的可过滤维度（如地区、技术栈、人名），没有则为空数组
+- supersedes 仅当旧事实确实被新事实取代（如端口变更、方案更替）
+- 不确定时宁可放入 contradicts 而不是 supersedes
+/no_think`,
+      },
+      {
+        role: 'user',
+        content: `新事实：\n${content}\n\n近期旧事实：\n[${relatedContext}]`,
+      },
+    ],
+    max_tokens: 1024,
+    temperature: 0.1,
+    response_format: {
+      type: 'json_schema',
+      json_schema: {
+        type: 'object',
+        properties: {
+          duplicate_of: { type: ['string', 'null'] },
+          supersedes: { type: 'array', items: { type: 'string' } },
+          contradicts: { type: 'array', items: { type: 'string' } },
+          entities: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: { key: { type: 'string' }, value: { type: 'string' } },
+              required: ['key', 'value'],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ['duplicate_of', 'supersedes', 'contradicts', 'entities'],
+        additionalProperties: false,
+      },
+    },
+  })
+
+  const parsed = extractJson<FactPostProcessResult>(response)
+  if (!parsed) return
+
+  if (parsed.entities?.length) {
+    await setMemoryEntities(env, userId, id, parsed.entities)
+  }
+  if (parsed.duplicate_of) {
+    await env.DB.prepare('UPDATE memories SET archived = 1 WHERE id = ? AND user_id = ?')
+      .bind(id, userId)
+      .run()
+    await deleteMemoryIndex(env, id)
+    return
+  }
+  for (const oldId of parsed.supersedes || []) {
+    await insertLink(env, id, oldId, 'supersedes')
+    await env.DB.prepare('UPDATE memories SET archived = 1 WHERE id = ? AND user_id = ? AND id != ?')
+      .bind(oldId, userId, id)
+      .run()
+    await deleteMemoryIndex(env, oldId)
+  }
+  for (const oldId of parsed.contradicts || []) {
+    await insertLink(env, id, oldId, 'contradicts')
+  }
+}
+
+export async function setMemoryEntities(
   env: Env,
   userId: string,
-  id: string
+  memoryId: string,
+  entities: Array<{ key: string; value: string }>,
 ): Promise<void> {
-  await env.DB.prepare('DELETE FROM memories WHERE id = ? AND user_id = ?').bind(id, userId).run()
-  await deleteMemoryIndex(env, id)
+  await env.DB.prepare('DELETE FROM memory_entities WHERE memory_id = ?').bind(memoryId).run()
+  for (const e of entities) {
+    if (!e.key || !e.value) continue
+    await env.DB.prepare(
+      'INSERT OR IGNORE INTO memory_entities (memory_id, user_id, key, value) VALUES (?, ?, ?, ?)',
+    )
+      .bind(memoryId, userId, e.key.trim().toLowerCase(), e.value.trim())
+      .run()
+  }
+}
+
+async function insertLink(env: Env, fromId: string, toId: string, relation: string): Promise<void> {
+  await env.DB.prepare(
+    'INSERT OR IGNORE INTO memory_links (from_id, to_id, relation, created_at) VALUES (?, ?, ?, ?)',
+  )
+    .bind(fromId, toId, relation, Date.now())
+    .run()
+}
+
+/** 从 LLM 响应中提取 JSON（兼容裸 JSON 与 ```json 包裹） */
+function extractJson<T>(response: unknown): T | null {
+  const raw =
+    typeof response === 'string'
+      ? response
+      : ((response as { response?: string })?.response ??
+        (response as { choices?: Array<{ message?: { content?: string } }> })?.choices?.[0]?.message?.content ??
+        '')
+  if (!raw) return null
+  const cleaned = raw.replace(/```(?:json)?\s*/gi, '').replace(/\s*```/g, '')
+  const match = cleaned.match(/\{[\s\S]*\}/)
+  if (!match) return null
+  try {
+    return JSON.parse(match[0]) as T
+  } catch {
+    return null
+  }
+}
+
+// 供类型复用（indexing 的 deps 构造在服务层统一走这里）
+export function indexingDeps(env: Env) {
+  return { env, runAIWithTimeout, withRetry }
+}
+
+export function memoryToIndexable(row: MemoryRecord) {
+  return toIndexable(row)
 }

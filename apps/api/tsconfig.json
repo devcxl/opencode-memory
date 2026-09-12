@@ -11,7 +11,7 @@
     "noEmit": true,
     "isolatedModules": true,
     "paths": {
-      "@devcxl/opencode-memory-shared": [
+      "@devcxl/cabbage-memory-shared": [
         "../../packages/shared/src"
       ]
     },
