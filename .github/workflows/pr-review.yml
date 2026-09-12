@@ -3,6 +3,7 @@ name: PR Review Gate
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -12,6 +13,7 @@ jobs:
   review:
     name: 自动代码审查 (Pi Agent)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
       pull-requests: write
@@ -35,16 +37,16 @@ jobs:
           prompt: |
             请对 PR #${{ github.event.pull_request.number }} 的代码变更执行深度代码审查。
 
-            执行步骤：
-            1. 运行 `gh pr diff ${{ github.event.pull_request.number }}` 或 `git diff origin/${{ github.base_ref }}...HEAD` 查看本次 PR 的实际变更。
-            2. 结合代码库上下文进行审查，重点排查：
-               - 业务逻辑正确性与边界处理
-               - 安全性（如越权、未授权接口调用、注入、凭据泄露等）
-               - 性能、资源泄露与并发/异步竞态
-               - 架构规范与错误处理（避免静默吞异常）
-               - 单测覆盖与测试有效性
-            3. 输出清晰有条理的 Markdown 评审报告（包含：总体结论、问题清单按严重程度分级说明并指明具体代码位置与修复建议、改进亮点）。
-            4. 审查完成后，使用 `gh pr comment ${{ github.event.pull_request.number }} --body "<审查报告内容>"` 将评审结果发布到该 PR 中。
+            执行要求与策略：
+            1. 先运行 `git --no-pager diff --stat origin/${{ github.base_ref }}...HEAD` 获取变更文件总览；
+            2. 忽略 pnpm-lock.yaml、构建产物等自动生成文件，聚焦核心逻辑变更（如 apps/api, apps/plugin, apps/pi-extension, packages/shared）；
+            3. 排查要点：
+               - 业务逻辑正确性与边界（空值、异常分支）
+               - 安全性（越权访问、鉴权绕过、注入、敏感配置泄露）
+               - 检索与性能（排序稳定性、超时、资源泄露）
+               - 单测覆盖有效性
+            4. 生成结构清晰的 Markdown 评审报告（结论、问题清单分级及具体位置与改进建议）；
+            5. 使用 `gh pr comment ${{ github.event.pull_request.number }} --body "<审查报告>"` 发布评论。
         env:
           HALF_CABBAGE_BASE_URL: ${{ secrets.HALF_CABBAGE_BASE_URL }}
           HALF_CABBAGE_API_KEY: ${{ secrets.HALF_CABBAGE_API_KEY }}
