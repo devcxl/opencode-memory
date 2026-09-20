@@ -13,7 +13,8 @@ jobs:
   review:
     name: 自动代码审查 (Pi Agent)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 单次审查上限 15 分钟，最多两次尝试，40 分钟留出重试与收尾余量
+    timeout-minutes: 40
     permissions:
       contents: read
       pull-requests: write
@@ -42,8 +43,12 @@ jobs:
 
           echo "Extracted PR overview: stat lines=$(wc -l < /tmp/pr-diff/stat.txt), commits=$(wc -l < /tmp/pr-diff/commits.txt)"
 
+      # 上游模型流可能中途断开（日志特征：Upstream stream ended before terminal chunk）。
+      # 这类失败与代码无关且瞬时，因此同一份提示词最多尝试两次，两次都失败才判定门禁失败。
       - name: Run Pi Code Review
         id: pi_review
+        continue-on-error: true
+        timeout-minutes: 15
         uses: devcxl/agentic-action@main
         with:
           provider: 'half-cabbage'
@@ -52,29 +57,39 @@ jobs:
           tools: 'read,grep,find,ls'
           github_token: ${{ secrets.GITHUB_TOKEN }}
           context_files: '/tmp/pr-diff/stat.txt /tmp/pr-diff/commits.txt'
-          prompt: |
-            请基于提供的变更统计（@/tmp/pr-diff/stat.txt）和提交历史（@/tmp/pr-diff/commits.txt），结合本地已检出的完整代码库进行全面而深入的代码审查。
-
-            审查指引：
-            1. 请使用 read 工具针对核心代码改动（如 apps/api/src/auth/、apps/api/src/services/、apps/api/src/search/hybrid.ts、apps/plugin/src/）按需查阅其实现细节。
-            2. 重点排查维度：
-               - 业务逻辑正确性与边界处理（数据模型统一、空值、异常分支、生命周期）
-               - 安全性（越权访问、鉴权绕过、SQL/FTS注入、敏感配置泄露、CORS凭据安全）
-               - 检索与性能（两桶分层混合检索稳定性、分面过滤、Cron 定时任务幂等与死循环防范）
-               - 架构与类型契约（Shared 领域模型、OpenCode 插件薄客户端、Pi 扩展、MCP 协议一致性）
-               - 单测覆盖有效性与回归风险
-            3. 输出报告必须包含：
-               - 总体结论与风险评级（推荐合并 / 建议优化 / 存在风险）
-               - 架构重构亮点说明
-               - 分级问题清单（按 Critical / High / Medium 分级，指明具体文件、代码行与整改方案）
-               - 合并前核查清单
+          prompt: '.github/prompts/pr-review.md'
         env:
           HALF_CABBAGE_BASE_URL: ${{ secrets.HALF_CABBAGE_BASE_URL }}
           HALF_CABBAGE_API_KEY: ${{ secrets.HALF_CABBAGE_API_KEY }}
           EXA_API_KEY: ${{ secrets.EXA_API_KEY }}
 
+      - name: Retry Pi Code Review
+        id: pi_review_retry
+        if: steps.pi_review.outcome == 'failure'
+        continue-on-error: true
+        timeout-minutes: 15
+        uses: devcxl/agentic-action@main
+        with:
+          provider: 'half-cabbage'
+          model: 'deepseek-v4-flash'
+          thinking: 'high'
+          tools: 'read,grep,find,ls'
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          context_files: '/tmp/pr-diff/stat.txt /tmp/pr-diff/commits.txt'
+          prompt: '.github/prompts/pr-review.md'
+        env:
+          HALF_CABBAGE_BASE_URL: ${{ secrets.HALF_CABBAGE_BASE_URL }}
+          HALF_CABBAGE_API_KEY: ${{ secrets.HALF_CABBAGE_API_KEY }}
+          EXA_API_KEY: ${{ secrets.EXA_API_KEY }}
+
+      - name: Fail Review Gate
+        if: steps.pi_review.outcome == 'failure' && steps.pi_review_retry.outcome == 'failure'
+        run: |
+          echo "::error::两次审查尝试均失败（上游模型流中断或超时），详见上方两次运行的日志"
+          exit 1
+
       - name: Post Review Comment to PR
-        if: always() && steps.pi_review.conclusion == 'success'
+        if: steps.pi_review.outcome == 'success' || steps.pi_review_retry.outcome == 'success'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
