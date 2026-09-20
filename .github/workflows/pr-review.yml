@@ -63,7 +63,7 @@ jobs:
           provider: 'half-cabbage'
           model: 'deepseek-v4-flash'
           thinking: 'high'
-          tools: 'read,grep,find,ls'
+          tools: 'read,grep,find,ls,write'
           github_token: ${{ secrets.GITHUB_TOKEN }}
           context_files: '/tmp/pr-diff/full.patch /tmp/pr-diff/stat.txt /tmp/pr-diff/commits.txt'
           prompt: '.github/prompts/pr-review.md'
@@ -82,7 +82,7 @@ jobs:
           provider: 'half-cabbage'
           model: 'deepseek-v4-flash'
           thinking: 'high'
-          tools: 'read,grep,find,ls'
+          tools: 'read,grep,find,ls,write'
           github_token: ${{ secrets.GITHUB_TOKEN }}
           context_files: '/tmp/pr-diff/full.patch /tmp/pr-diff/stat.txt /tmp/pr-diff/commits.txt'
           prompt: '.github/prompts/pr-review.md'
@@ -97,6 +97,8 @@ jobs:
           echo "::error::两次审查尝试均失败（上游模型流中断或超时），详见上方两次运行的日志"
           exit 1
 
+      # 报告落盘 review-report.md：GITHUB_STEP_SUMMARY 每个 step 独立，不能跨 step 读取，
+      # 因此评论正文必须取自模型写入仓库的文件。
       - name: Post Review Comment to PR
         if: steps.pi_review.outcome == 'success' || steps.pi_review_retry.outcome == 'success'
         env:
@@ -104,13 +106,21 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           PR_NUM="${{ github.event.pull_request.number }}"
+          if [ ! -s review-report.md ]; then
+            echo "::error::审查任务成功但没有产出 review-report.md，无法回评"
+            exit 1
+          fi
           if [ -z "$PR_NUM" ]; then
             echo "No PR number (manual dispatch), skipping comment."
             exit 0
           fi
-          if [ ! -s "$GITHUB_STEP_SUMMARY" ]; then
-            echo "::error::审查任务成功但没有产出任何报告内容，无法回评"
-            exit 1
-          fi
-          gh pr comment "$PR_NUM" --body-file "$GITHUB_STEP_SUMMARY"
+          gh pr comment "$PR_NUM" --body-file review-report.md
           echo "Successfully posted review comment to PR #$PR_NUM"
+
+      - name: Upload Review Report
+        if: always() && hashFiles('review-report.md') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-review-report
+          path: review-report.md
+          retention-days: 14
