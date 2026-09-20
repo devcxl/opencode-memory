@@ -33,17 +33,26 @@ jobs:
           BASE_REF="origin/${{ github.base_ref || 'main' }}"
           git fetch origin ${{ github.base_ref || 'main' }} --depth=1 || true
 
-          # 1. 生成整体变更统计（过滤掉自动生成的大文件）
-          git --no-pager diff "$BASE_REF..HEAD" --stat \
+          # 1. 直出完整 patch：本地 git 比对（三点差异，以 merge-base 为准），
+          #    不受 GitHub diff API 20000 行上限约束；lockfile 与生成物排除在外。
+          git --no-pager diff "$BASE_REF...HEAD" \
+            -- . ':!pnpm-lock.yaml' ':!*.lock.yml' ':!**/dist/**' \
+            > /tmp/pr-diff/full.patch
+
+          # 2. 生成整体变更统计（过滤掉自动生成的大文件）
+          git --no-pager diff "$BASE_REF...HEAD" --stat \
             -- . ':!pnpm-lock.yaml' ':!*.lock.yml' ':!dist' \
             > /tmp/pr-diff/stat.txt
 
-          # 2. 生成提交历史清单
+          # 3. 生成提交历史清单
           git --no-pager log "$BASE_REF..HEAD" --oneline > /tmp/pr-diff/commits.txt
 
-          echo "Extracted PR overview: stat lines=$(wc -l < /tmp/pr-diff/stat.txt), commits=$(wc -l < /tmp/pr-diff/commits.txt)"
+          echo "Extracted PR overview: patch lines=$(wc -l < /tmp/pr-diff/full.patch), stat lines=$(wc -l < /tmp/pr-diff/stat.txt), commits=$(wc -l < /tmp/pr-diff/commits.txt)"
 
-      # 上游模型流可能中途断开（日志特征：Upstream stream ended before terminal chunk）。
+      # 审查策略：把 full.patch 直出给模型作为事实来源，模型只做少量补充阅读。
+      # 早期"只给 stat/commits 让 agent 自行探索代码库"的方式在 100+ 文件 PR 上会陷入
+      # 长时间工具循环，15~30 分钟都跑不完；直出模式实测约 5 分钟即可产出完整报告。
+      # 上游模型流仍可能中途断开（日志特征：Upstream stream ended before terminal chunk），
       # 这类失败与代码无关且瞬时，因此同一份提示词最多尝试两次，两次都失败才判定门禁失败。
       - name: Run Pi Code Review
         id: pi_review
@@ -56,7 +65,7 @@ jobs:
           thinking: 'high'
           tools: 'read,grep,find,ls'
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          context_files: '/tmp/pr-diff/stat.txt /tmp/pr-diff/commits.txt'
+          context_files: '/tmp/pr-diff/full.patch /tmp/pr-diff/stat.txt /tmp/pr-diff/commits.txt'
           prompt: '.github/prompts/pr-review.md'
         env:
           HALF_CABBAGE_BASE_URL: ${{ secrets.HALF_CABBAGE_BASE_URL }}
@@ -75,7 +84,7 @@ jobs:
           thinking: 'high'
           tools: 'read,grep,find,ls'
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          context_files: '/tmp/pr-diff/stat.txt /tmp/pr-diff/commits.txt'
+          context_files: '/tmp/pr-diff/full.patch /tmp/pr-diff/stat.txt /tmp/pr-diff/commits.txt'
           prompt: '.github/prompts/pr-review.md'
         env:
           HALF_CABBAGE_BASE_URL: ${{ secrets.HALF_CABBAGE_BASE_URL }}
@@ -95,9 +104,13 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           PR_NUM="${{ github.event.pull_request.number }}"
-          if [ -n "$PR_NUM" ] && [ -s "$GITHUB_STEP_SUMMARY" ]; then
-            gh pr comment "$PR_NUM" --body-file "$GITHUB_STEP_SUMMARY"
-            echo "Successfully posted review comment to PR #$PR_NUM"
-          else
-            echo "Skipping PR comment (PR number missing or step summary empty)."
+          if [ -z "$PR_NUM" ]; then
+            echo "No PR number (manual dispatch), skipping comment."
+            exit 0
           fi
+          if [ ! -s "$GITHUB_STEP_SUMMARY" ]; then
+            echo "::error::审查任务成功但没有产出任何报告内容，无法回评"
+            exit 1
+          fi
+          gh pr comment "$PR_NUM" --body-file "$GITHUB_STEP_SUMMARY"
+          echo "Successfully posted review comment to PR #$PR_NUM"
