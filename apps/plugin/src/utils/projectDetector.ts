@@ -2,7 +2,6 @@ import { execSync } from "node:child_process";
 import * as crypto from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
-import { getMemoryDir } from "../config/runtime.js";
 
 /**
  * 探测当前目录所属的项目标识。
@@ -19,9 +18,6 @@ import { getMemoryDir } from "../config/runtime.js";
  */
 export function detectProject(cwd: string = process.cwd()): string | null {
   const resolved = path.resolve(cwd);
-
-  // 排除 memory 自身目录（避免递归写入）
-  if (isWithinMemoryDir(resolved)) return null;
 
   // 排除 home 和 dotfiles 目录（即使有 git remote 也不应识别为项目）
   if (isExcludedPath(resolved)) return null;
@@ -90,12 +86,6 @@ function isExcludedPath(dirPath: string): boolean {
     }
   }
   return false;
-}
-
-/** 判断路径是否位于 memory 目录下 */
-function isWithinMemoryDir(dirPath: string): boolean {
-  const memoryDir = getMemoryDir();
-  return dirPath.startsWith(memoryDir + path.sep) || dirPath === memoryDir;
 }
 
 /**

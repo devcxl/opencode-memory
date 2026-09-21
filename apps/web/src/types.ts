@@ -1,21 +1,23 @@
 import type {
-  Memory,
+  MemoryRecord,
+  MemoryType,
+  SearchResult,
   AskResponse,
   RagCitation,
   ApiResponse,
   Stats,
-  Instruction,
-  Learning,
-  Daily,
-} from '@devcxl/opencode-memory-shared'
+  User,
+  ApiTokenView,
+} from '@devcxl/cabbage-memory-shared'
 
 export type {
-  Memory,
+  MemoryRecord,
+  MemoryType,
+  SearchResult,
   AskResponse,
   RagCitation,
   ApiResponse,
   Stats,
-  Instruction,
-  Learning,
-  Daily,
+  User,
+  ApiTokenView,
 }

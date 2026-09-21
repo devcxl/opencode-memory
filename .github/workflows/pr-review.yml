@@ -1,0 +1,127 @@
+name: PR Review Gate
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: 自动代码审查 (Pi Agent)
+    runs-on: ubuntu-latest
+    # 单次审查上限 15 分钟，最多两次尝试，40 分钟留出重试与收尾余量
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract PR Overview on Runner
+        id: prep
+        run: |
+          mkdir -p /tmp/pr-diff
+          BASE_REF="origin/${{ github.base_ref || 'main' }}"
+          git fetch origin ${{ github.base_ref || 'main' }} --depth=1 || true
+
+          # 1. 直出完整 patch：本地 git 比对（三点差异，以 merge-base 为准），
+          #    不受 GitHub diff API 20000 行上限约束；lockfile 与生成物排除在外。
+          git --no-pager diff "$BASE_REF...HEAD" \
+            -- . ':!pnpm-lock.yaml' ':!*.lock.yml' ':!**/dist/**' \
+            > /tmp/pr-diff/full.patch
+
+          # 2. 生成整体变更统计（过滤掉自动生成的大文件）
+          git --no-pager diff "$BASE_REF...HEAD" --stat \
+            -- . ':!pnpm-lock.yaml' ':!*.lock.yml' ':!dist' \
+            > /tmp/pr-diff/stat.txt
+
+          # 3. 生成提交历史清单
+          git --no-pager log "$BASE_REF..HEAD" --oneline > /tmp/pr-diff/commits.txt
+
+          echo "Extracted PR overview: patch lines=$(wc -l < /tmp/pr-diff/full.patch), stat lines=$(wc -l < /tmp/pr-diff/stat.txt), commits=$(wc -l < /tmp/pr-diff/commits.txt)"
+
+      # 审查策略：把 full.patch 直出给模型作为事实来源，模型只做少量补充阅读。
+      # 早期"只给 stat/commits 让 agent 自行探索代码库"的方式在 100+ 文件 PR 上会陷入
+      # 长时间工具循环，15~30 分钟都跑不完；直出模式数分钟即可产出完整报告。
+      # 交付物是仓库根目录的 review-report.md：门禁以该文件为准而非 pi 退出码——
+      # 实测模型写完报告后可能继续自行校验直到步骤超时，此时报告本身已经完整。
+      # 仅当第一次尝试没有产出报告时才重试（覆盖上游流中断、429 等瞬时失败）。
+      - name: Run Pi Code Review
+        id: pi_review
+        continue-on-error: true
+        timeout-minutes: 15
+        uses: devcxl/agentic-action@main
+        with:
+          provider: 'half-cabbage'
+          model: 'deepseek-v4-flash'
+          thinking: 'high'
+          tools: 'read,write'
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          context_files: '/tmp/pr-diff/full.patch /tmp/pr-diff/stat.txt /tmp/pr-diff/commits.txt'
+          prompt: '.github/prompts/pr-review.md'
+        env:
+          HALF_CABBAGE_BASE_URL: ${{ secrets.HALF_CABBAGE_BASE_URL }}
+          HALF_CABBAGE_API_KEY: ${{ secrets.HALF_CABBAGE_API_KEY }}
+          EXA_API_KEY: ${{ secrets.EXA_API_KEY }}
+
+      - name: Retry Pi Code Review
+        id: pi_review_retry
+        if: hashFiles('review-report.md') == ''
+        continue-on-error: true
+        timeout-minutes: 15
+        uses: devcxl/agentic-action@main
+        with:
+          provider: 'half-cabbage'
+          model: 'deepseek-v4-flash'
+          thinking: 'high'
+          tools: 'read,write'
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          context_files: '/tmp/pr-diff/full.patch /tmp/pr-diff/stat.txt /tmp/pr-diff/commits.txt'
+          prompt: '.github/prompts/pr-review.md'
+        env:
+          HALF_CABBAGE_BASE_URL: ${{ secrets.HALF_CABBAGE_BASE_URL }}
+          HALF_CABBAGE_API_KEY: ${{ secrets.HALF_CABBAGE_API_KEY }}
+          EXA_API_KEY: ${{ secrets.EXA_API_KEY }}
+
+      - name: Fail Review Gate
+        if: hashFiles('review-report.md') == ''
+        run: |
+          echo "::error::两次审查尝试均未产出 review-report.md，门禁失败，详见上方两次运行的日志"
+          exit 1
+
+      # 报告落盘 review-report.md：GITHUB_STEP_SUMMARY 每个 step 独立，不能跨 step 读取，
+      # 因此评论正文必须取自模型写入仓库的文件。
+      - name: Post Review Comment to PR
+        if: hashFiles('review-report.md') != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if ! grep -q "合并前核查清单" review-report.md; then
+            echo "::error::review-report.md 缺少必需的「合并前核查清单」章节，报告不完整，无法回评"
+            exit 1
+          fi
+          PR_NUM="${{ github.event.pull_request.number }}"
+          if [ -z "$PR_NUM" ]; then
+            echo "No PR number (manual dispatch), skipping comment."
+            exit 0
+          fi
+          gh pr comment "$PR_NUM" --body-file review-report.md
+          echo "Successfully posted review comment to PR #$PR_NUM"
+
+      - name: Upload Review Report
+        if: always() && hashFiles('review-report.md') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-review-report
+          path: review-report.md
+          retention-days: 14
