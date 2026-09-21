@@ -51,9 +51,10 @@ jobs:
 
       # 审查策略：把 full.patch 直出给模型作为事实来源，模型只做少量补充阅读。
       # 早期"只给 stat/commits 让 agent 自行探索代码库"的方式在 100+ 文件 PR 上会陷入
-      # 长时间工具循环，15~30 分钟都跑不完；直出模式实测约 5 分钟即可产出完整报告。
-      # 上游模型流仍可能中途断开（日志特征：Upstream stream ended before terminal chunk），
-      # 这类失败与代码无关且瞬时，因此同一份提示词最多尝试两次，两次都失败才判定门禁失败。
+      # 长时间工具循环，15~30 分钟都跑不完；直出模式数分钟即可产出完整报告。
+      # 交付物是仓库根目录的 review-report.md：门禁以该文件为准而非 pi 退出码——
+      # 实测模型写完报告后可能继续自行校验直到步骤超时，此时报告本身已经完整。
+      # 仅当第一次尝试没有产出报告时才重试（覆盖上游流中断、429 等瞬时失败）。
       - name: Run Pi Code Review
         id: pi_review
         continue-on-error: true
@@ -63,7 +64,7 @@ jobs:
           provider: 'half-cabbage'
           model: 'deepseek-v4-flash'
           thinking: 'high'
-          tools: 'read,grep,find,ls,write'
+          tools: 'read,write'
           github_token: ${{ secrets.GITHUB_TOKEN }}
           context_files: '/tmp/pr-diff/full.patch /tmp/pr-diff/stat.txt /tmp/pr-diff/commits.txt'
           prompt: '.github/prompts/pr-review.md'
@@ -74,7 +75,7 @@ jobs:
 
       - name: Retry Pi Code Review
         id: pi_review_retry
-        if: steps.pi_review.outcome == 'failure'
+        if: hashFiles('review-report.md') == ''
         continue-on-error: true
         timeout-minutes: 15
         uses: devcxl/agentic-action@main
@@ -82,7 +83,7 @@ jobs:
           provider: 'half-cabbage'
           model: 'deepseek-v4-flash'
           thinking: 'high'
-          tools: 'read,grep,find,ls,write'
+          tools: 'read,write'
           github_token: ${{ secrets.GITHUB_TOKEN }}
           context_files: '/tmp/pr-diff/full.patch /tmp/pr-diff/stat.txt /tmp/pr-diff/commits.txt'
           prompt: '.github/prompts/pr-review.md'
@@ -92,24 +93,24 @@ jobs:
           EXA_API_KEY: ${{ secrets.EXA_API_KEY }}
 
       - name: Fail Review Gate
-        if: steps.pi_review.outcome == 'failure' && steps.pi_review_retry.outcome == 'failure'
+        if: hashFiles('review-report.md') == ''
         run: |
-          echo "::error::两次审查尝试均失败（上游模型流中断或超时），详见上方两次运行的日志"
+          echo "::error::两次审查尝试均未产出 review-report.md，门禁失败，详见上方两次运行的日志"
           exit 1
 
       # 报告落盘 review-report.md：GITHUB_STEP_SUMMARY 每个 step 独立，不能跨 step 读取，
       # 因此评论正文必须取自模型写入仓库的文件。
       - name: Post Review Comment to PR
-        if: steps.pi_review.outcome == 'success' || steps.pi_review_retry.outcome == 'success'
+        if: hashFiles('review-report.md') != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
-          PR_NUM="${{ github.event.pull_request.number }}"
-          if [ ! -s review-report.md ]; then
-            echo "::error::审查任务成功但没有产出 review-report.md，无法回评"
+          if ! grep -q "合并前核查清单" review-report.md; then
+            echo "::error::review-report.md 缺少必需的「合并前核查清单」章节，报告不完整，无法回评"
             exit 1
           fi
+          PR_NUM="${{ github.event.pull_request.number }}"
           if [ -z "$PR_NUM" ]; then
             echo "No PR number (manual dispatch), skipping comment."
             exit 0

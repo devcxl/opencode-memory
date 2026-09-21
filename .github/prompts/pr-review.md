@@ -6,7 +6,7 @@
 - @/tmp/pr-diff/commits.txt：提交历史
 
 审查方式：
-1. 先通读 full.patch，不要逐个文件浏览整个代码库；确需补充上下文时，最多再读 10 个文件（优先 apps/api/src/auth/、apps/api/src/services/、apps/api/src/search/hybrid.ts、apps/plugin/src/、packages/shared/src/）。
+1. 先通读 full.patch，它已包含全部改动与上下文行，不要逐个文件浏览代码库；确需补充上下文时最多再读 3 个文件，读完立即进入结论。
 2. 重点排查维度：
    - 业务逻辑正确性与边界处理（数据模型统一、空值、异常分支、生命周期）
    - 安全性（越权访问、鉴权绕过、SQL/FTS注入、敏感配置泄露、CORS凭据安全）
@@ -22,4 +22,4 @@
 - 合并前核查清单
 
 完成后必须用 write 工具把完整报告写入仓库根目录的 `review-report.md`（Markdown，UTF-8），
-工作流会以该文件作为 PR 评论正文；同时把同样内容作为最终回复输出。
+该文件是 PR 评论正文的唯一来源。写入成功后立即结束本次任务：不要重复校验、不要再调用任何工具、不要重复写入。
