@@ -13,6 +13,8 @@ Simple markdown-based memory plugin for OpenCode.
 
 </div>
 
+> **v2 has moved to [devcxl/cabbage-memory](https://github.com/devcxl/cabbage-memory).** This repository keeps the v1 Markdown-based plugin (@devcxl/opencode-memory@1.2.0). The v2 remote memory service, plugin (@devcxl/cabbage-memory), MCP, pi extension and web console are maintained there.
+
 ## Installation
 
 Add to your OpenCode configuration at `~/.config/opencode/opencode.json`:

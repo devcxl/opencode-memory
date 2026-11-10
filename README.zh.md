@@ -13,6 +13,8 @@
 
 </div>
 
+> **v2 已迁移到独立仓库 [devcxl/cabbage-memory](https://github.com/devcxl/cabbage-memory)。** 本仓库保留 v1 的 Markdown 记忆插件（@devcxl/opencode-memory@1.2.0）；v2 的远程记忆服务、插件（@devcxl/cabbage-memory）、MCP、pi 扩展与 Web 控制台都在新仓库维护。
+
 ## 安装
 
 在 `~/.config/opencode/opencode.json` 中添加插件配置：
