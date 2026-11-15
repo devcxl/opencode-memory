@@ -31,11 +31,12 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Read package version
+      - name: Read package version and resolve dist-tag
         id: package
         run: |
           VERSION=$(bun -e "console.log(JSON.parse(require('node:fs').readFileSync('apps/plugin/package.json', 'utf8')).version)")
-          DIST_TAG=$(bun -e "const version = JSON.parse(require('node:fs').readFileSync('apps/plugin/package.json', 'utf8')).version; const prerelease = version.split('-')[1]; console.log(prerelease ? prerelease.split('.')[0] : 'latest')")
+          # dist-tag 规则只有一处实现：apps/plugin/src/release/distTag.ts
+          DIST_TAG=$(bun apps/plugin/src/release/distTagCli.ts "$VERSION")
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "dist_tag=${DIST_TAG}" >> "$GITHUB_OUTPUT"
 
