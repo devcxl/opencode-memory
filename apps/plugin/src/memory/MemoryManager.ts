@@ -9,7 +9,7 @@ import type {
   MonthGroup,
 } from "../types.js";
 import type { MemoryConfig } from "../config/runtime.js";
-import type { Providers, MemoryMode } from "../providers/factory.js";
+import type { Providers } from "../providers/types.js";
 import { ensureDir } from "../utils/fs.js";
 import { MemoryPaths } from "./MemoryPaths.js";
 import {
@@ -33,7 +33,6 @@ export class MemoryManager {
   private config: MemoryConfig;
   private paths: MemoryPaths;
   private providers: Providers;
-  private mode: MemoryMode;
   private projectStores: Map<string, ProjectStore> = new Map();
   private stateChecker: StateChecker;
   private fileSearcher: FileSearcher;
@@ -41,12 +40,11 @@ export class MemoryManager {
   constructor(config: MemoryConfig, providers?: Providers) {
     this.config = config;
     this.paths = new MemoryPaths(config.memoryDir);
-    this.mode = config.mode ?? "local";
 
     if (providers) {
       this.providers = providers;
     } else {
-      // 未注入 providers 时自动创建本地 Provider，保证向后兼容
+      // 未注入 providers 时使用本地实现，测试可注入替身
       this.providers = {
         vectorIndex: new LocalVectorIndexProvider(config),
         embedding: new LocalEmbeddingProvider(),
@@ -54,13 +52,12 @@ export class MemoryManager {
       };
     }
 
-    this.stateChecker = new StateChecker(config.memoryDir, this.mode);
+    this.stateChecker = new StateChecker(config.memoryDir);
     this.fileSearcher = new FileSearcher(
       config.memoryDir,
       this.paths.dailyDir,
       this.providers.fileStorage,
       (id) => this.getProjectStore(id),
-      this.mode,
     );
   }
 
@@ -119,11 +116,6 @@ export class MemoryManager {
     return this.paths.dailyPath(date);
   }
 
-  /** 是否为 remote 模式（记录独立存储，时间戳由服务端 created_at 决定） */
-  isRemote(): boolean {
-    return this.mode === "remote";
-  }
-
   /**
    * 获取或创建指定项目的向量存储实例
    * 使用延迟初始化，只在首次访问时创建 ProjectStore
@@ -166,7 +158,7 @@ export class MemoryManager {
    * @param project 项目级 memory 时的项目 ID
    * @param category 新分类（instruction | learning | daily），优于 target 推导
    * @param subType 新子类型（identity | rule | workflow | preference | episodic | knowledge）
-   * @param scope 作用域（global | project | user | local）
+   * @param _scope 仅为兼容工具入参保留；本地路径由 project 决定
    */
   getPathForTarget(
     target: string,
@@ -174,7 +166,7 @@ export class MemoryManager {
     project?: string | null,
     category?: string,
     subType?: string,
-    scope?: string,
+    _scope?: string,
   ): {
     filePath: string;
     displayName: string;
@@ -197,28 +189,6 @@ export class MemoryManager {
             sub_type: "knowledge",
           });
 
-    const effectiveScope = scope ?? (project ? "project" : "global");
-    const effectiveProject = project ?? "";
-
-    if (this.mode === "remote") {
-      const effectiveDate =
-        target === "daily" ? (normalizeDailyDate(date) ?? this.todayStr()) : "";
-      const filePath = [
-        resolved.category,
-        resolved.sub_type,
-        effectiveScope,
-        effectiveProject,
-        effectiveDate,
-      ].join(":");
-      return {
-        filePath,
-        displayName: filePath,
-        category: resolved.category,
-        subType: resolved.sub_type,
-      };
-    }
-
-    // local 模式
     const { category: cat, sub_type: st } = resolved;
     switch (target) {
       case "memory": {
@@ -350,14 +320,6 @@ export class MemoryManager {
       project,
     );
 
-    // remote 模式：记录独立存储，委托 provider 删除具体那条记录
-    if (
-      this.mode === "remote" &&
-      typeof this.providers.fileStorage.deleteByTimestamp === "function"
-    ) {
-      return this.providers.fileStorage.deleteByTimestamp(filePath, timestamp);
-    }
-
     const content = await this.providers.fileStorage.readFile(filePath);
 
     if (!content) {
@@ -391,20 +353,6 @@ export class MemoryManager {
    * 用于 daily log 等持续追加的场景，并保持向量索引与 git 提交一致
    */
   async appendFile(filePath: string, content: string): Promise<void> {
-    // remote 模式：记录独立存储，一次追加即一条新记录，不读回拼接
-    // 不嵌入时间戳：记录时间由服务端 created_at 决定，readFile 时再生成展示时间戳
-    if (this.mode === "remote") {
-      checkLineLimit(filePath, content);
-      await this.persistAndIndex(
-        filePath,
-        content,
-        `Append to ${path.basename(filePath)}`,
-        true,
-      );
-      return;
-    }
-
-    // local 模式：读回现有内容后整体重写
     // 本地文件按时间戳标记区分条目（delete/list 均依赖），追加时必须嵌入
     const timestamp = this.getLocalTimestamp();
     const stamped = `<!-- ${timestamp} -->\n${content}`;
@@ -522,44 +470,30 @@ export class MemoryManager {
   /**
    * 写入文件、更新向量索引、提交 git 三合一操作
    * 所有写入/编辑/删除/追加方法在修改文件后均执行此流程。
-   *
-   * local 模式：写入文件 + embed/index + git commit
-   * remote 模式：写入文件（Worker 侧自动 embed/index），跳过 git commit
    */
   private async persistAndIndex(
     filePath: string,
     content: string,
     operation: string,
-    append = false,
   ): Promise<void> {
-    // remote append：只新增一条记录；overwrite/edit 走 writeFile（远程 provider 内部先删后建）
-    if (append && this.mode === "remote") {
-      await this.providers.fileStorage.appendFile(filePath, content);
-      return;
-    }
-
     await this.providers.fileStorage.writeFile(filePath, content);
 
-    // local 模式：本地 embed + index + git commit
-    if (this.mode === "local") {
-      await this.embedAndIndex(filePath, content);
+    await this.embedAndIndex(filePath, content);
 
-      // 推导对应的向量索引路径，确保索引文件也被 git 追踪
-      const indexPaths: string[] = [];
-      const projectId = this.extractProjectId(filePath);
-      if (projectId) {
-        indexPaths.push(
-          path.join(this.paths.projectsDir, projectId, "root.index"),
-        );
-      } else if (filePath.includes(path.sep + "daily" + path.sep)) {
-        indexPaths.push(this.paths.dailyIndexPath);
-      } else {
-        indexPaths.push(this.paths.rootIndexPath);
-      }
-
-      await gitCommit(operation, filePath, this.config.memoryDir, indexPaths);
+    // 推导对应的向量索引路径，确保索引文件也被 git 追踪
+    const indexPaths: string[] = [];
+    const projectId = this.extractProjectId(filePath);
+    if (projectId) {
+      indexPaths.push(
+        path.join(this.paths.projectsDir, projectId, "root.index"),
+      );
+    } else if (filePath.includes(path.sep + "daily" + path.sep)) {
+      indexPaths.push(this.paths.dailyIndexPath);
+    } else {
+      indexPaths.push(this.paths.rootIndexPath);
     }
-    // remote 模式：Worker 侧自动 embed + index，无需本地 git commit
+
+    await gitCommit(operation, filePath, this.config.memoryDir, indexPaths);
   }
 
   /**
@@ -608,8 +542,6 @@ export class MemoryManager {
   /**
    * 收集所有有内容的 context 文件，供 AI 构建提示词上下文
    * 包含全局 MEMORY/IDENTITY/USER 以及可选的 project memory。
-   *
-   * 统一使用 getPathForTarget() 生成路径，确保 local/remote 双模式兼容。
    */
   async getContextFiles(projectId?: string | null): Promise<ContextFile[]> {
     const files: ContextFile[] = [];

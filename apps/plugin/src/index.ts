@@ -2,7 +2,6 @@ import { Plugin } from "@opencode/plugin";
 import { loadConfig } from "./config/runtime.js";
 import { MemoryManager } from "./memory/MemoryManager.js";
 import { BootstrapManager } from "./memory/BootstrapManager.js";
-import { createProviders, type Providers } from "./providers/factory.js";
 import {
   getMemoryAwarenessInstructions,
   BOOTSTRAP_INSTRUCTIONS,
@@ -30,13 +29,7 @@ export default Plugin.define({
   async setup(ctx) {
     const config = loadConfig(ctx.options as Record<string, unknown>);
 
-    // remote 模式注入远程 Provider；local 模式由 MemoryManager 内部创建
-    let providers: Providers | undefined;
-    if (config.mode === "remote" && config.remote) {
-      providers = await createProviders("remote", config);
-    }
-
-    const memoryManager = new MemoryManager(config, providers);
+    const memoryManager = new MemoryManager(config);
     const bootstrapManager = new BootstrapManager(memoryManager);
     const projects = new SessionProjectResolver(ctx);
     const sessionStates = new SessionStateStore();
