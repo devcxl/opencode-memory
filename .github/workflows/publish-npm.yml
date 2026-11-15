@@ -143,8 +143,8 @@ jobs:
           # registry 是最终事实来源：发布后回读 version 与 dist-tags。
           # 期望：本次版本已上线；dist-tag 指向本次版本；latest 仍指 V1；v2 只指 2.x 稳定版；rc 只指 2.x prerelease。
           PUBLISHED_VERSION=""
-          for attempt in 1 2 3 4 5 6; do
-            if PUBLISHED_VERSION=$(npm view "${PKG}@${VERSION}" version 2>/dev/null); then
+          for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18; do
+            if PUBLISHED_VERSION=$(npm view "${PKG}@${VERSION}" version --prefer-online 2>/dev/null); then
               break
             fi
             echo "registry 尚未返回 ${VERSION}（第 ${attempt} 次），10s 后重试"
@@ -156,7 +156,7 @@ jobs:
             exit 1
           fi
 
-          npm view "$PKG" dist-tags --json > "$RUNNER_TEMP/dist-tags.json"
+          npm view "$PKG" dist-tags --json --prefer-online > "$RUNNER_TEMP/dist-tags.json"
           bun .release-tooling/apps/plugin/src/release/verifyDistTagsCli.ts \
             "$VERSION" "$DIST_TAG" "$RUNNER_TEMP/dist-tags.json"
 
