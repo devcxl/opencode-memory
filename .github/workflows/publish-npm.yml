@@ -19,6 +19,8 @@ permissions:
 
 jobs:
   publish:
+    # 1.x 是 V1 布局，不在 V2 流水线里；1.2.1 由维护者手动 npm publish。
+    if: ${{ !startsWith(github.event.release.tag_name, 'v1.') }}
     name: 发布到 npm registry
     runs-on: ubuntu-latest
 
