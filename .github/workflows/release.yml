@@ -3,8 +3,8 @@ name: Release
 # 触发：人工 workflow_dispatch，校验通过后创建并推送 v<version> tag。
 # 后续由 `Draft Release` workflow 创建 draft release；人工发布后由 `Publish to npm` 发布。
 #
-# 基底分支规则（唯一实现在 apps/plugin/src/release/releaseBaseRefs.ts）：
-#   1.x → 允许 v1 维护分支或 main；2.x → 只允许 main（V1 例外不放宽 2.x 保护）。
+# 基底分支规则：2.x 只允许 main；1.x 的 docs-only 补丁从 v1 维护分支手动发布，
+# 不经过本 workflow（v1 树缺少 apps/plugin/package.json，会在 layout guard 处失败）。
 on:
   workflow_dispatch:
     inputs:
@@ -64,14 +64,13 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Read package version, dist-tag and allowed base branches
+      - name: Read package version and dist-tag
         id: package
         run: |
           VERSION=$(bun -e "console.log(JSON.parse(require('node:fs').readFileSync('apps/plugin/package.json', 'utf8')).version)")
           # dist-tag 规则只有一处实现：apps/plugin/src/release/distTag.ts
           # 通过 .release-tooling 执行默认分支上的最新规则，不在 workflow 里重复判断版本
           DIST_TAG=$(bun .release-tooling/apps/plugin/src/release/distTagCli.ts "$VERSION")
-          ALLOWED_REFS=$(bun .release-tooling/apps/plugin/src/release/releaseBaseRefsCli.ts "$VERSION")
 
           TAG="v${VERSION}"
           PRERELEASE=false
@@ -82,7 +81,6 @@ jobs:
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "dist_tag=${DIST_TAG}" >> "$GITHUB_OUTPUT"
-          echo "allowed_refs=${ALLOWED_REFS}" >> "$GITHUB_OUTPUT"
           echo "prerelease=${PRERELEASE}" >> "$GITHUB_OUTPUT"
 
       - name: Run typecheck
@@ -115,29 +113,19 @@ jobs:
             exit 1
           fi
 
-      # 1.x 允许来自 v1 维护分支或 main；2.x 只能来自 main。
-      # 规则唯一实现在 apps/plugin/src/release/releaseBaseRefs.ts，这里只做 git 判断。
-      - name: Ensure target ref is on an allowed base branch
+      # 1.x 的 docs-only 补丁（1.2.1）从 v1 维护分支手动发布，不经过本 workflow：
+      # v1 树缺少 apps/plugin/package.json，会在 layout guard 处明确失败。
+      - name: Ensure target ref is reachable from default branch
         env:
-          VERSION: ${{ steps.package.outputs.version }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
-          ALLOWED_REFS=$(bun .release-tooling/apps/plugin/src/release/releaseBaseRefsCli.ts "$VERSION")
+          git fetch origin "$DEFAULT_BRANCH"
           TARGET_SHA=$(git rev-parse HEAD)
 
-          for REF in $ALLOWED_REFS; do
-            if ! git fetch --no-tags origin "refs/heads/${REF}:refs/remotes/origin/${REF}" 2>/dev/null; then
-              echo "提示：origin/${REF} 不存在，跳过"
-              continue
-            fi
-
-            if git merge-base --is-ancestor "$TARGET_SHA" "origin/${REF}"; then
-              echo "✓ 目标 ref 的提交在 origin/${REF} 上"
-              exit 0
-            fi
-          done
-
-          echo "::error::目标 ref 不在允许的基底分支上（version $VERSION，允许：$ALLOWED_REFS）。2.x 必须来自 main；只有 1.x 允许来自 v1 维护线。"
-          exit 1
+          if ! git merge-base --is-ancestor "$TARGET_SHA" "origin/$DEFAULT_BRANCH"; then
+            echo "::error::目标 ref 不在 origin/$DEFAULT_BRANCH 提交链上，拒绝创建发布 tag"
+            exit 1
+          fi
 
       - name: Create tag
         env:
@@ -158,14 +146,12 @@ jobs:
           VERSION: ${{ steps.package.outputs.version }}
           DIST_TAG: ${{ steps.package.outputs.dist_tag }}
           PRERELEASE: ${{ steps.package.outputs.prerelease }}
-          ALLOWED_REFS: ${{ steps.package.outputs.allowed_refs }}
           RELEASE_REF: ${{ inputs.ref }}
         run: |
           {
             echo "## Release tag created"
             echo ""
             echo "- Ref: \`${RELEASE_REF}\`"
-            echo "- Allowed base branches: \`${ALLOWED_REFS}\`"
             echo "- Version: \`${VERSION}\`"
             echo "- Tag: \`${TAG}\`"
             echo "- npm dist-tag: \`${DIST_TAG}\`"

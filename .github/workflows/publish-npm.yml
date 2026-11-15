@@ -79,30 +79,20 @@ jobs:
             exit 1
           fi
 
-      # tag 的祖先校验：1.x 允许来自 v1 维护分支（含 main）；2.x 只能是 main。
-      # 规则唯一实现在 apps/plugin/src/release/releaseBaseRefs.ts，这里只做 git 判断。
-      - name: Ensure release commit is on an allowed base branch
+      # 1.x 的 docs-only 补丁（1.2.1）从 v1 维护分支手动发布，不经过本 workflow：
+      # v1 树缺少 apps/plugin/package.json，会在 layout guard 处明确失败。
+      - name: Ensure release commit is reachable from default branch
         env:
-          VERSION: ${{ steps.package.outputs.version }}
           CURRENT_TAG: ${{ github.event.release.tag_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
-          ALLOWED_REFS=$(bun .release-tooling/apps/plugin/src/release/releaseBaseRefsCli.ts "$VERSION")
+          git fetch origin "$DEFAULT_BRANCH"
           RELEASE_SHA=$(git rev-parse "${CURRENT_TAG}^{commit}")
 
-          for REF in $ALLOWED_REFS; do
-            if ! git fetch --no-tags origin "refs/heads/${REF}:refs/remotes/origin/${REF}" 2>/dev/null; then
-              echo "提示：origin/${REF} 不存在，跳过"
-              continue
-            fi
-
-            if git merge-base --is-ancestor "$RELEASE_SHA" "origin/${REF}"; then
-              echo "✓ ${CURRENT_TAG}（${VERSION}）的提交在 origin/${REF} 上"
-              exit 0
-            fi
-          done
-
-          echo "::error::Release tag ($CURRENT_TAG, version $VERSION) 的提交不在允许的基底分支上（允许：$ALLOWED_REFS）。2.x 必须来自 main；只有 1.x 允许来自 v1 维护线。"
-          exit 1
+          if ! git merge-base --is-ancestor "$RELEASE_SHA" "origin/$DEFAULT_BRANCH"; then
+            echo "::error::Release tag ($CURRENT_TAG) 对应提交不在 origin/$DEFAULT_BRANCH 提交链上，拒绝发布到 npm"
+            exit 1
+          fi
 
       - name: Run typecheck
         run: pnpm typecheck
