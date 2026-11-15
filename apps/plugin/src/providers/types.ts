@@ -58,13 +58,13 @@ export interface IFileStorageProvider {
   writeFile(path: string, content: string): Promise<void>;
   appendFile(path: string, content: string): Promise<void>;
   deleteFile(path: string): Promise<void>;
-  /** 按时间戳删除单条记录，返回删除结果描述；远程模式下匹配具体记录，本地模式重写文件 */
-  deleteByTimestamp?(path: string, timestamp: string): Promise<string>;
   exists(path: string): Promise<boolean>;
   listFiles(pattern: string): Promise<string[]>;
-  /** 枚举逻辑文件及时间戳（remote 模式 list 用）。root=根文件，daily=按日期命名的日志 */
-  listAll?(): Promise<{
-    root: Array<{ name: string; timestamps: string[] }>;
-    daily: Array<{ name: string; timestamps: string[] }>;
-  }>;
+}
+
+/** MemoryManager 依赖的 Provider 组合，测试可整体替换 */
+export interface Providers {
+  vectorIndex: IVectorIndexProvider;
+  embedding: IEmbeddingProvider;
+  fileStorage: IFileStorageProvider;
 }

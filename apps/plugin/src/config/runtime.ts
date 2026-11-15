@@ -13,20 +13,24 @@ function parseConfigFile(raw: string): unknown {
   return JSON.parse(cleaned);
 }
 
-/** 远程模式配置 */
-export interface RemoteConfig {
-  apiUrl: string;
-  apiKey: string;
-}
-
 /** 内存插件运行时配置 */
 export interface MemoryConfig {
   memoryDir: string;
-  /** 运行模式：local（本地文件+向量索引）或 remote（Cloudflare Worker API） */
-  mode: "local" | "remote";
-  /** 远程模式配置（mode=remote 时必填） */
-  remote?: RemoteConfig;
 }
+
+/**
+ * 远程模式已迁出本包。
+ *
+ * 仍然识别旧的 `mode: "remote"` / `remote` 配置和 `OPM_MODE=remote`，
+ * 但只用于抛出迁移错误，绝不静默回退 local。
+ */
+const REMOTE_MIGRATION_MESSAGE = [
+  "[opencode-memory] Remote mode is no longer supported in this package.",
+  "Remote memory (Cloudflare Worker + web console) has moved to @devcxl/cabbage-memory.",
+  'Remove `mode: "remote"` / `remote` from your opencode config and unset',
+  "OPM_MODE / OPM_API_URL / OPM_API_KEY, then reinstall this plugin.",
+  "If you still need remote memory, install @devcxl/cabbage-memory.",
+].join(" ");
 
 function getHomeDir(): string {
   return process.env.HOME || os.homedir();
@@ -105,60 +109,37 @@ export function getPluginConfigObject(): Record<string, unknown> | undefined {
   return undefined;
 }
 
-/** 解析 env:// 前缀的配置值：env://OPM_API_KEY → process.env.OPM_API_KEY */
-export function resolveEnvRef(value: string | undefined): string | undefined {
-  if (!value) return value;
-  if (value.startsWith("env://")) {
-    return process.env[value.slice(6)];
+/**
+ * 远程模式迁移守卫。
+ *
+ * 检测旧的插件 options（`mode: "remote"` 或残留的 `remote` 配置块）
+ * 与 `OPM_MODE=remote` 环境变量。命中时直接抛错，避免静默以 local 运行。
+ */
+function assertLocalOnly(pluginOpts: Record<string, unknown>): void {
+  const hasRemoteOptions =
+    pluginOpts.mode === "remote" ||
+    (pluginOpts.remote !== undefined && pluginOpts.remote !== null);
+
+  if (process.env.OPM_MODE === "remote" || hasRemoteOptions) {
+    throw new Error(REMOTE_MIGRATION_MESSAGE);
   }
-  return value;
 }
 
-/** 生成运行时配置对象，支持插件 options + opencode.json + 环境变量三重配置 */
+/**
+ * 生成运行时配置对象。
+ *
+ * 插件 options 覆盖 opencode.json 中的同名配置。配置只描述本地文件位置；
+ * 远程配置会在解析阶段被迁移守卫拒绝。
+ */
 export function loadConfig(overrides?: Record<string, unknown>): MemoryConfig {
-  const memoryDir = getMemoryDir();
-  const fileOpts = getPluginConfigObject();
   const pluginOpts: Record<string, unknown> = {
-    ...fileOpts,
+    ...getPluginConfigObject(),
     ...overrides,
   };
 
-  // 从插件配置读取 mode
-  const configMode = pluginOpts?.mode as string | undefined;
+  assertLocalOnly(pluginOpts);
 
-  // remote 配置：文件配置与插件 options 做浅合并，options 优先
-  const fileRemote = fileOpts?.remote as Record<string, string> | undefined;
-  const overrideRemote = overrides?.remote as
-    Record<string, string> | undefined;
-  const remoteConfig = { ...fileRemote, ...overrideRemote };
-  const configApiUrl = remoteConfig?.apiUrl;
-  const configApiKeyRaw = remoteConfig?.apiKey;
-
-  // 环境变量覆盖：OPM_MODE > 插件 options > opencode.json > 默认 "local"
-  const effectiveMode: "local" | "remote" =
-    process.env.OPM_MODE === "remote"
-      ? "remote"
-      : configMode === "remote"
-        ? "remote"
-        : "local";
-
-  const config: MemoryConfig = { memoryDir, mode: effectiveMode };
-
-  if (effectiveMode === "remote") {
-    // apiKey 优先级：OPM_API_KEY 环境变量 > opencode.json remote.apiKey（均支持 env:// 前缀）
-    const apiKey = resolveEnvRef(process.env.OPM_API_KEY || configApiKeyRaw);
-    if (!apiKey) {
-      throw new Error(
-        "Remote mode requires apiKey. Set OPM_API_KEY or configure remote.apiKey in opencode.json.",
-      );
-    }
-    config.remote = {
-      apiUrl: process.env.OPM_API_URL || configApiUrl || "",
-      apiKey,
-    };
-  }
-
-  return config;
+  return { memoryDir: getMemoryDir() };
 }
 
 /** 获取 opencode 配置文件路径 */

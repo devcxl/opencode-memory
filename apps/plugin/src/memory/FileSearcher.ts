@@ -7,7 +7,6 @@ import type {
   MonthGroup,
   SearchScope,
 } from "../types.js";
-import type { MemoryMode } from "../providers/factory.js";
 import type { IFileStorageProvider } from "../providers/types.js";
 import { embedText } from "../search/embedding.js";
 import {
@@ -23,13 +22,11 @@ export class FileSearcher {
     private dailyDir: string,
     private fileStorage: IFileStorageProvider,
     private getProjectStore: (projectId: string) => ProjectStore,
-    private mode: MemoryMode = "local",
   ) {}
 
   /**
    * 关键词搜索：逐行扫描文件，返回匹配行及其位置
    * 在内存中全量扫描而非依赖索引，适合文件量较少的场景
-   * remote 模式：通过 fileStorage.readFile 读取文件内容
    */
   async searchFiles(
     query: string,
@@ -79,11 +76,10 @@ export class FileSearcher {
    * 语义搜索：基于向量相似度匹配，支持按时段和项目筛选。
    *
    * 搜索策略：
-   * 1. remote 模式：直接通过 fileStorage.search() 调用 Worker API
-   * 2. local 模式：本地 embed + 向量搜索
-   * 3. scope=project 但无 projectId 时降级为全局搜索
-   * 4. 为每个结果附加时间戳（用于 period 过滤和展示）
-   * 5. period 过滤为宽松前缀匹配（"YYYY-MM" 或 "YYYY"），在向量检索后执行
+   * 1. local：本地 embed + 向量搜索
+   * 2. scope=project 但无 projectId 时降级为全局搜索
+   * 3. 为每个结果附加时间戳（用于 period 过滤和展示）
+   * 4. period 过滤为宽松前缀匹配（"YYYY-MM" 或 "YYYY"），在向量检索后执行
    */
   async semanticSearch(
     query: string,
@@ -92,54 +88,6 @@ export class FileSearcher {
     projectId?: string | null,
     scope: SearchScope = "all",
   ): Promise<SemanticSearchResult[]> {
-    // remote 模式：直接调 Worker API 搜索
-    if (this.mode === "remote") {
-      const { RemoteFileStorageProvider } =
-        await import("../providers/remote/FileStorageProvider.js");
-      if (this.fileStorage instanceof RemoteFileStorageProvider) {
-        const includeGlobal = scope !== "project" || !projectId;
-        const globalResults = includeGlobal
-          ? await this.fileStorage.search(query, maxResults)
-          : [];
-        const projectResults =
-          projectId && scope !== "global"
-            ? await this.fileStorage.search(
-                query,
-                maxResults,
-                undefined,
-                projectId,
-              )
-            : [];
-
-        // 全局搜索会召回项目记录，与项目搜索结果按 id 去重，保留分数更高的那条
-        const byId = new Map<string, (typeof globalResults)[number]>();
-        for (const r of [...globalResults, ...projectResults]) {
-          const existing = byId.get(r.id);
-          if (!existing || r.score > existing.score) {
-            byId.set(r.id, r);
-          }
-        }
-        const allResults = [...byId.values()];
-        allResults.sort((a, b) => b.score - a.score);
-
-        const filtered = period
-          ? allResults.filter((r) => {
-              const ts = new Date(r.created_at).toISOString().slice(0, 10);
-              return ts.startsWith(period);
-            })
-          : allResults;
-
-        return filtered.slice(0, maxResults).map((r) => ({
-          score: r.score,
-          filePath: r.id,
-          heading: "",
-          text: r.text,
-          timestamp: new Date(r.created_at).toISOString().slice(0, 10),
-        }));
-      }
-    }
-
-    // local 模式：本地 embedding + 向量搜索
     const queryVector = await embedText(query);
     const module = await import("../search/vector-store.js");
     // period 过滤时先取全部结果（或超大上限），在内存中过滤
@@ -269,15 +217,11 @@ export class FileSearcher {
     return result;
   }
 
-  /** 获取所有文件：remote 走 provider 枚举，local 读本地目录 */
+  /** 获取所有文件：读取本地目录并解析时间戳 */
   private async getAllFiles(): Promise<{
     root: Array<{ name: string; timestamps: string[] }>;
     daily: Array<{ name: string; timestamps: string[] }>;
   }> {
-    if (this.mode === "remote" && this.fileStorage.listAll) {
-      return this.fileStorage.listAll();
-    }
-
     const { root, daily } = this.listFiles();
     const rootFiles: Array<{ name: string; timestamps: string[] }> = [];
     for (const file of root) {

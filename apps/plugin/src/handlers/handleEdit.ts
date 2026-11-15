@@ -44,10 +44,6 @@ export async function handleEdit(
       ? `[scope: project/${project}]`
       : `[scope: global]`;
     const result = `${scopeTag} Edited ${displayName}`;
-    // remote 模式：记录时间由服务端 created_at 决定，本地时间戳无意义且会误导删除
-    if (memoryManager.isRemote()) {
-      return `${result}\n\n(remote 记录时间以 read/list 返回的时间戳为准)`;
-    }
     return `${result}\n\nTimestamp: ${memoryManager.getLocalTimestamp()}`;
   } catch (error) {
     return toErrorMessage(error, `Failed to edit ${target}`);

@@ -1,7 +1,7 @@
 {
   "name": "@devcxl/opencode-memory",
   "version": "2.0.0",
-  "description": "Markdown-based memory plugin for OpenCode V2 — supports local and Cloudflare Workers remote modes",
+  "description": "Markdown-based memory plugin for OpenCode V2 (local mode)",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -33,9 +33,7 @@
     "access": "public"
   },
   "dependencies": {
-    "@cloudflare/workers-types": "^4.20260702.1",
     "@opencode/plugin": "^2.3.0",
-    "jose": "^5.10.0",
     "zod": "^4.1.8"
   },
   "optionalDependencies": {
@@ -46,7 +44,6 @@
     "onnxruntime-node": "1.23.2"
   },
   "devDependencies": {
-    "@devcxl/opencode-memory-shared": "workspace:*",
     "@types/bun": "^1.3.8",
     "@types/node": "^22.19.11",
     "typescript": "^5.9.3"
