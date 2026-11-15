@@ -1,13 +1,21 @@
 process.env.TRANSFORMERS_VERBOSITY = "error";
 process.env.ORT_LOGGING_LEVEL = "error";
 
-import { pipeline } from "@huggingface/transformers";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import {
   EMBEDDING_MODEL as MODEL,
   EMBEDDING_DTYPE as DTYPE,
 } from "../config/embedding.js";
+
+// `@huggingface/transformers` 是 optionalDependency，静态 import 会让整个插件模块在
+// 缺失该包时直接加载失败（用户只能看到原始 Cannot find module）。这里改为首次使用时
+// 动态加载，让 setup 里的可选依赖检查先给出统一、可操作的错误。
+type TransformersModule = typeof import("@huggingface/transformers");
+
+async function loadTransformers(): Promise<TransformersModule> {
+  return import("@huggingface/transformers");
+}
 
 // ─── 缓存管理 ────────────────────────────────────────────────
 
@@ -85,6 +93,7 @@ export async function initEmbedder(): Promise<void> {
             clearModelCache();
           }
 
+          const { pipeline } = await loadTransformers();
           embedder = await pipeline("feature-extraction", MODEL.modelId, {
             dtype: DTYPE,
           });

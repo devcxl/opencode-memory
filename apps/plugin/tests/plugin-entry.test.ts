@@ -1,8 +1,8 @@
 import { beforeAll, expect, test } from "bun:test";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { createV2Harness } from "./support/v2-plugin-harness.js";
+import { withTempHome } from "./support/temp-home.js";
 
 // ─── 测试工具 ─────────────────────────────────────────────
 
@@ -12,21 +12,6 @@ beforeAll(async () => {
   const mod = await import("../src/index.js");
   MemoryPlugin = mod.default;
 });
-
-/** 在临时 HOME 下运行，确保读写的是隔离的 memory 目录 */
-async function withTempHome(run: (memoryDir: string) => Promise<void>) {
-  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "opm-plugin-entry-"));
-  const previousHome = process.env.HOME;
-  process.env.HOME = homeDir;
-
-  try {
-    await run(path.join(homeDir, ".config", "opencode", "memory"));
-  } finally {
-    if (previousHome === undefined) delete process.env.HOME;
-    else process.env.HOME = previousHome;
-    fs.rmSync(homeDir, { recursive: true, force: true });
-  }
-}
 
 // ─── 测试 ─────────────────────────────────────────────────
 
