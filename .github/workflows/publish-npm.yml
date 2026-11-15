@@ -102,6 +102,7 @@ jobs:
           TAG: ${{ inputs.tag || github.event.release.tag_name }}
         run: |
           VERSION="${TAG#v}"
+          export VERSION
           npm view "$PKG" dist-tags --json > "$RUNNER_TEMP/dist-tags.json"
           node -e '
             const fs = require("node:fs");
