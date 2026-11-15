@@ -5,3 +5,4 @@ dist/
 .codegraph/
 .wrangler
 .opencode
+.worktrees/
