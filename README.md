@@ -9,19 +9,26 @@
 
 [English](./README.md) | [中文](./README.zh.md)
 
-Simple markdown-based memory plugin for OpenCode.
+Simple markdown-based memory plugin for OpenCode **V1**.
 
 </div>
 
+> **This is the V1 line (OpenCode V1).** `latest` stays on 1.2.x, and this package does not load in OpenCode V2.
+> OpenCode V2 users: install `@devcxl/opencode-memory@v2` and use the `plugins` config key.
+> V1 maintenance is limited to security/data-loss fixes; see the [migration guide](https://github.com/devcxl/opencode-memory/blob/main/docs/migration-v2.md).
+> The remote memory service and web console are maintained in [devcxl/cabbage-memory](https://github.com/devcxl/cabbage-memory).
+
 ## Installation
 
-Add to your OpenCode configuration at `~/.config/opencode/opencode.json`:
+Add to your OpenCode **V1** configuration at `~/.config/opencode/opencode.json`:
 
 ```json
 {
   "plugin": ["@devcxl/opencode-memory"]
 }
 ```
+
+`latest` currently points to `1.2.1` (V1). For V2, do not use this package; install `@devcxl/opencode-memory@v2` instead.
 
 ## Memory Files
 

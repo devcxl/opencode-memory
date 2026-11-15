@@ -9,19 +9,26 @@
 
 [English](./README.md) | [中文](./README.zh.md)
 
-基于 Markdown 的 OpenCode 简易记忆插件。
+基于 Markdown 的 OpenCode **V1** 简易记忆插件。
 
 </div>
 
+> **这是 V1 线（OpenCode V1）。** `latest` 保持 1.2.x，本包在 OpenCode V2 中不会加载。
+> OpenCode V2 用户：安装 `@devcxl/opencode-memory@v2`，配置键使用 `plugins`。
+> V1 只做安全/数据损坏修复；迁移说明见[迁移指南](https://github.com/devcxl/opencode-memory/blob/main/docs/migration-v2.md)。
+> 远程记忆服务与 Web 控制台在 [devcxl/cabbage-memory](https://github.com/devcxl/cabbage-memory) 维护。
+
 ## 安装
 
-在 `~/.config/opencode/opencode.json` 中添加插件配置：
+在 OpenCode **V1** 的 `~/.config/opencode/opencode.json` 中添加插件配置：
 
 ```json
 {
   "plugin": ["@devcxl/opencode-memory"]
 }
 ```
+
+`latest` 当前指向 `1.2.1`（V1）。V2 不要使用本包，请安装 `@devcxl/opencode-memory@v2`。
 
 ## 记忆文件
 

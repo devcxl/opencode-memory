@@ -1,7 +1,7 @@
 {
   "name": "@devcxl/opencode-memory",
-  "version": "1.2.0",
-  "description": "Simple markdown-based memory plugin for OpenCode",
+  "version": "1.2.1",
+  "description": "Simple markdown-based memory plugin for OpenCode V1 (legacy; OpenCode V2 users install @devcxl/opencode-memory@v2)",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
