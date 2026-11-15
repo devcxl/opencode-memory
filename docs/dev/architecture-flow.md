@@ -1,7 +1,7 @@
 # opencode-memory 整体流程
 
-> 版本: v1.0 | 日期: 2026-08-08
-> 基于当前 main 分支代码 (`14b3e9a`)
+> 版本: v2.0 | 日期: 2026-11-15
+> 基于 OpenCode V2 插件 API (`@opencode/plugin@2.3.0`)
 
 ---
 
@@ -61,46 +61,50 @@ flowchart TB
 
 ---
 
-## 2. 插件生命周期（启动 → 注入 → 工具调用）
+## 2. 插件生命周期（V2：setup → 注入 → 工具调用）
 
 ```mermaid
 sequenceDiagram
-    participant OC as opencode CLI
-    participant P as MemoryPlugin
+    participant OC as OpenCode V2 server
+    participant P as MemoryPlugin.setup(ctx)
     participant C as loadConfig
     participant F as createProviders
     participant M as MemoryManager
     participant B as BootstrapManager
-    participant D as detectProject
+    participant R as SessionProjectResolver
 
-    OC->>P: 加载插件
-    P->>C: 读取 opencode.json<br/>确定 mode (local/remote)
+    OC->>P: 加载插件并执行 setup(ctx)
+    P->>C: loadConfig(ctx.options)<br/>确定 mode (local/remote)
     P->>F: remote? 创建 RemoteProvider<br/>local? 由 MemoryManager 自动创建
     P->>M: new MemoryManager(config, providers)
     P->>B: new BootstrapManager(memoryManager)
-    P->>D: 检测当前 git 项目 → projectId
+    P->>OC: ctx.command.transform 注册 /memory-init
+    P->>OC: ctx.tool.transform 注册 memory 工具
+    P->>OC: ctx.tool.hook("execute.after") 记录 memory 操作
+    P->>OC: ctx.session.hook("context") 注入记忆上下文
+    P->>OC: ctx.event.subscribe(session.created/deleted)
 
-    alt 首次运行 (initState = uninitialized)
-        OC->>P: config 注入 memory-init 命令
-        OC->>P: command.execute.before
-        P->>B: createInitTemplates()<br/>BOOTSTRAP/IDENTITY/USER/MEMORY
-    end
+    Note over OC,P: /memory-init（仅未初始化时执行）
+    OC->>P: command execute
+    P->>B: createInitTemplates()<br/>BOOTSTRAP/IDENTITY/USER/MEMORY
+    P->>OC: ctx.session.prompt(初始化引导 prompt)
 
-    Note over OC,P: 每次会话：系统提示注入
-    OC->>P: experimental.chat.system.transform
-    P->>M: getInitState() + getContextFiles()
+    Note over OC,P: 每次模型请求前：系统提示注入
+    OC->>P: session.hook("context")
+    P->>R: resolve(sessionID) → projectId
+    P->>M: getInitState() + getContextFiles(projectId)
     alt 引导阶段
         P->>M: 读取 BOOTSTRAP.md
     else 常规阶段
         P->>M: 读取 MEMORY > IDENTITY > USER > PROJECT
     end
-    P-->>OC: 注入 Memory Context + 感知指令<br/>(无日期，保证 KV cache 命中)
+    P-->>OC: event.system.push({ type: "text", text })<br/>Memory Context + 感知指令（无日期）
 
     Note over OC,P: 会话事件追踪
-    OC->>P: session.created → 注册 SessionState
+    OC->>P: session.created → 注册 SessionState + project 缓存
     OC->>P: tool.execute.after (memory) → 记录操作
-    OC->>P: session.idle → 有操作未写 daily 则 toast 提示
-    OC->>P: session.deleted → 清理状态
+    OC->>P: 下次 context hook → 有操作未写 daily 则追加 Memory Reminder
+    OC->>P: session.deleted → 清理状态与缓存
 ```
 
 ---
@@ -112,7 +116,7 @@ flowchart TD
     A["memory 工具 execute"] --> B["ensureDirectories()<br/>创建 memory/daily 目录<br/>重建失效索引"]
     B --> C["validateAction(action)"]
     C --> D{"scope → project 解析<br/>resolveProjectId"}
-    D -->|"scope=project"| E["detectProject()<br/>检测失败降级全局"]
+    D -->|"scope=project"| E["SessionProjectResolver<br/>读取 session.location → detectProject()<br/>检测失败降级全局"]
     D -->|"global/all"| F["resolvedProject = null"]
     E --> G
     F --> G{"action 分发 switch"}
@@ -122,14 +126,12 @@ flowchart TD
     G -->|delete| H4[handleDelete]
     G -->|search| H5[handleSearch<br/>scope 默认 all/global]
     G -->|list| H6[handleList]
-    G -->|extract| H7[触发提取]
     H1 --> M[MemoryManager]
     H2 --> M
     H3 --> M
     H4 --> M
     H5 --> M
     H6 --> M
-    H7 --> M
 ```
 
 ---
@@ -236,19 +238,19 @@ flowchart TD
 
 ## 7. 目录结构与职责
 
-| 目录 | 职责 |
-|------|------|
-| `apps/plugin/src/index.ts` | 插件入口：工具注册、事件监听、系统提示注入 |
-| `apps/plugin/src/handlers/` | 7 个 action 的入参解析与结果格式化 |
-| `apps/plugin/src/memory/MemoryManager.ts` | 核心：读写/追加/编辑/删除、路径解析、持久化+索引 |
-| `apps/plugin/src/providers/{local,remote}/` | 双模式 Provider：文件/向量/嵌入 |
-| `apps/plugin/src/search/` | 本地 chunker / embedding / vector-store |
-| `apps/api/src/index.ts` | Worker 入口：中间件 + 全部 REST 路由 |
-| `apps/api/src/services/` | 业务服务：memory/instruction/learning/daily/extraction |
-| `apps/api/src/search/` | 跨表检索 / 混合搜索 / 分词 / 打分 |
-| `apps/api/src/cron/` | 定时合并 + 过期清理 |
-| `apps/web/src/` | React 管理台（总览/记忆列表/AI 问答） |
-| `packages/shared/src/` | 共享 schema 与类型 |
+| 目录                                        | 职责                                                   |
+| ------------------------------------------- | ------------------------------------------------------ |
+| `apps/plugin/src/index.ts`                  | 插件入口：工具注册、事件监听、系统提示注入             |
+| `apps/plugin/src/handlers/`                 | 7 个 action 的入参解析与结果格式化                     |
+| `apps/plugin/src/memory/MemoryManager.ts`   | 核心：读写/追加/编辑/删除、路径解析、持久化+索引       |
+| `apps/plugin/src/providers/{local,remote}/` | 双模式 Provider：文件/向量/嵌入                        |
+| `apps/plugin/src/search/`                   | 本地 chunker / embedding / vector-store                |
+| `apps/api/src/index.ts`                     | Worker 入口：中间件 + 全部 REST 路由                   |
+| `apps/api/src/services/`                    | 业务服务：memory/instruction/learning/daily/extraction |
+| `apps/api/src/search/`                      | 跨表检索 / 混合搜索 / 分词 / 打分                      |
+| `apps/api/src/cron/`                        | 定时合并 + 过期清理                                    |
+| `apps/web/src/`                             | React 管理台（总览/记忆列表/AI 问答）                  |
+| `packages/shared/src/`                      | 共享 schema 与类型                                     |
 
 ## 8. 关键路径速查
 

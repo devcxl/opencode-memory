@@ -13,27 +13,46 @@ Simple markdown-based memory plugin for OpenCode.
 
 </div>
 
-> **v2 has moved to [devcxl/cabbage-memory](https://github.com/devcxl/cabbage-memory).** This repository keeps the v1 Markdown-based plugin (@devcxl/opencode-memory@1.2.0). The v2 remote memory service, plugin (@devcxl/cabbage-memory), MCP, pi extension and web console are maintained there.
+> **Now targets OpenCode V2.** `@devcxl/opencode-memory@2.0.0` uses the V2 plugin API (`plugins` config, `@opencode/plugin`). OpenCode V1 users should stay on `@devcxl/opencode-memory@1.2.0` (`plugin` config). The remote memory service and `@devcxl/cabbage-memory` remain maintained in [devcxl/cabbage-memory](https://github.com/devcxl/cabbage-memory).
 
 ## Installation
 
-Add to your OpenCode configuration at `~/.config/opencode/opencode.json`:
+Add to your OpenCode V2 configuration at `~/.config/opencode/opencode.json`:
 
-```json
+```jsonc
 {
-  "plugin": ["@devcxl/opencode-memory"]
+  "$schema": "https://opencode.ai/config.json",
+  "plugins": ["@devcxl/opencode-memory"],
 }
 ```
 
+To pass plugin options:
+
+```jsonc
+{
+  "plugins": [
+    {
+      "package": "@devcxl/opencode-memory",
+      "options": {
+        "mode": "remote",
+        "remote": { "apiUrl": "...", "apiKey": "..." },
+      },
+    },
+  ],
+}
+```
+
+Local plugin paths in V2 must point to directories.
+
 ## Memory Files
 
-| File | Purpose |
-|------|---------|
-| `MEMORY.md` | Long-term memory (crucial facts, decisions, preferences) |
-| `IDENTITY.md` | AI identity (name, persona, behavioral rules) |
-| `USER.md` | User profile (name, preferences, context) |
-| `daily/YYYY-MM-DD.md` | Daily logs (day-to-day activities) |
-| `BOOTSTRAP.md` | First run setup instructions (deleted after setup) |
+| File                  | Purpose                                                  |
+| --------------------- | -------------------------------------------------------- |
+| `MEMORY.md`           | Long-term memory (crucial facts, decisions, preferences) |
+| `IDENTITY.md`         | AI identity (name, persona, behavioral rules)            |
+| `USER.md`             | User profile (name, preferences, context)                |
+| `daily/YYYY-MM-DD.md` | Daily logs (day-to-day activities)                       |
+| `BOOTSTRAP.md`        | First run setup instructions (deleted after setup)       |
 
 ## Storage Location
 
@@ -44,18 +63,18 @@ Add to your OpenCode configuration at `~/.config/opencode/opencode.json`:
 
 **Actions:**
 
-| Action | Description | Parameters |
-|--------|-------------|------------|
-| `read` | Read memory file | `target`: memory, identity, user, daily; `date`, `scope` (optional) |
-| `write` | Write to memory file | `target`, `content`, `mode`: append/overwrite; `date`, `scope` (optional) |
-| `edit` | Edit specific part of file | `target`, `oldString`, `newString`; `date`, `scope` (optional) |
-| `delete` | Delete entry by timestamp | `target`, `timestamp`; `date`, `scope` (optional) |
-| `search` | Semantic search memory files | `query`, `max_results`, `period`, `scope` (optional) |
-| `list` | List memory files | `period` (optional) |
+| Action   | Description                  | Parameters                                                                |
+| -------- | ---------------------------- | ------------------------------------------------------------------------- |
+| `read`   | Read memory file             | `target`: memory, identity, user, daily; `date`, `scope` (optional)       |
+| `write`  | Write to memory file         | `target`, `content`, `mode`: append/overwrite; `date`, `scope` (optional) |
+| `edit`   | Edit specific part of file   | `target`, `oldString`, `newString`; `date`, `scope` (optional)            |
+| `delete` | Delete entry by timestamp    | `target`, `timestamp`; `date`, `scope` (optional)                         |
+| `search` | Semantic search memory files | `query`, `max_results`, `period`, `scope` (optional)                      |
+| `list`   | List memory files            | `period` (optional)                                                       |
 
 **Examples:**
 
-Use `--scope project` for the current project memory. The project ID is auto-detected from git; if detection fails, memory falls back to global.
+Use `--scope project` for the current project memory. The project ID is auto-detected from the session's project directory via git; if detection fails, memory falls back to global.
 
 ```bash
 memory --action read --target memory
@@ -81,11 +100,11 @@ memory --action write --target memory --scope project --content "Use port 5432"
 5. AI deletes BOOTSTRAP.md
 6. Setup complete
 
-The setup can be triggered manually with `/memory-init` at any time (only available when the memory system is not yet fully initialized).
+The setup can be triggered manually with `/memory-init` at any time (the command runs only while the memory system is not yet fully initialized).
 
 ## Context Injection
 
-MEMORY.md, IDENTITY.md, and USER.md are automatically injected into the system prompt at session start.
+MEMORY.md, IDENTITY.md, and USER.md are injected into the system prompt before each model request.
 
 Daily logs must be accessed via the `memory` tool.
 

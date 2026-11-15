@@ -70,7 +70,18 @@ test("loadConfig reads mode from opencode.json", () => {
       fs.writeFileSync(
         configPath,
         JSON.stringify({
-          plugin: [["@devcxl/opencode-memory", { mode: "remote", remote: { apiUrl: "https://mem.example.com", apiKey: "test-key" } }]],
+          plugin: [
+            [
+              "@devcxl/opencode-memory",
+              {
+                mode: "remote",
+                remote: {
+                  apiUrl: "https://mem.example.com",
+                  apiKey: "test-key",
+                },
+              },
+            ],
+          ],
         }),
         "utf-8",
       );
@@ -127,7 +138,18 @@ test("loadConfig env:// prefix resolves to environment variable", () => {
       fs.writeFileSync(
         configPath,
         JSON.stringify({
-          plugin: [["@devcxl/opencode-memory", { mode: "remote", remote: { apiUrl: "https://mem.example.com", apiKey: "env://OPM_CUSTOM_KEY" } }]],
+          plugin: [
+            [
+              "@devcxl/opencode-memory",
+              {
+                mode: "remote",
+                remote: {
+                  apiUrl: "https://mem.example.com",
+                  apiKey: "env://OPM_CUSTOM_KEY",
+                },
+              },
+            ],
+          ],
         }),
         "utf-8",
       );
@@ -154,7 +176,12 @@ test("loadConfig OPM_API_URL env var overrides opencode.json apiUrl", () => {
       fs.writeFileSync(
         configPath,
         JSON.stringify({
-          plugin: [["@devcxl/opencode-memory", { mode: "remote", remote: { apiKey: "test-key" } }]],
+          plugin: [
+            [
+              "@devcxl/opencode-memory",
+              { mode: "remote", remote: { apiKey: "test-key" } },
+            ],
+          ],
         }),
         "utf-8",
       );
@@ -178,7 +205,12 @@ test("loadConfig throws when remote mode but no apiKey", () => {
       fs.writeFileSync(
         configPath,
         JSON.stringify({
-          plugin: [["@devcxl/opencode-memory", { mode: "remote", remote: { apiUrl: "https://mem.example.com" } }]],
+          plugin: [
+            [
+              "@devcxl/opencode-memory",
+              { mode: "remote", remote: { apiUrl: "https://mem.example.com" } },
+            ],
+          ],
         }),
         "utf-8",
       );
@@ -199,7 +231,12 @@ test("loadConfig defaults apiUrl to empty string when not configured in remote m
       fs.writeFileSync(
         configPath,
         JSON.stringify({
-          plugin: [["@devcxl/opencode-memory", { mode: "remote", remote: { apiKey: "test-key" } }]],
+          plugin: [
+            [
+              "@devcxl/opencode-memory",
+              { mode: "remote", remote: { apiKey: "test-key" } },
+            ],
+          ],
         }),
         "utf-8",
       );
@@ -250,7 +287,15 @@ test("getPluginConfigObject returns the full plugin options object", () => {
       fs.writeFileSync(
         configPath,
         JSON.stringify({
-          plugin: [["@devcxl/opencode-memory", { mode: "remote", remote: { apiUrl: "https://example.com", apiKey: "key123" } }]],
+          plugin: [
+            [
+              "@devcxl/opencode-memory",
+              {
+                mode: "remote",
+                remote: { apiUrl: "https://example.com", apiKey: "key123" },
+              },
+            ],
+          ],
         }),
         "utf-8",
       );
@@ -258,7 +303,79 @@ test("getPluginConfigObject returns the full plugin options object", () => {
       const opts = getPluginConfigObject();
       expect(opts).toBeDefined();
       expect(opts!.mode).toBe("remote");
-      expect(opts!.remote).toEqual({ apiUrl: "https://example.com", apiKey: "key123" });
+      expect(opts!.remote).toEqual({
+        apiUrl: "https://example.com",
+        apiKey: "key123",
+      });
+    });
+  } finally {
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  }
+});
+
+test("getPluginConfigObject supports V2 plugins object entries", () => {
+  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "opm-config-"));
+  try {
+    withHome(homeDir, () => {
+      const configPath = getOpencodeConfigPath();
+      fs.mkdirSync(path.dirname(configPath), { recursive: true });
+      fs.writeFileSync(
+        configPath,
+        JSON.stringify({
+          plugins: [
+            "@example/other",
+            {
+              package: "@devcxl/opencode-memory",
+              options: {
+                mode: "remote",
+                remote: { apiUrl: "https://v2.example.com", apiKey: "v2-key" },
+              },
+            },
+          ],
+        }),
+        "utf-8",
+      );
+
+      const opts = getPluginConfigObject();
+      expect(opts).toBeDefined();
+      expect(opts!.mode).toBe("remote");
+      expect(opts!.remote).toEqual({
+        apiUrl: "https://v2.example.com",
+        apiKey: "v2-key",
+      });
+    });
+  } finally {
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  }
+});
+
+test("loadConfig accepts plugin options and lets them override the config file", () => {
+  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "opm-config-"));
+  try {
+    withHome(homeDir, () => {
+      const configPath = getOpencodeConfigPath();
+      fs.mkdirSync(path.dirname(configPath), { recursive: true });
+      fs.writeFileSync(
+        configPath,
+        JSON.stringify({
+          plugins: [
+            {
+              package: "@devcxl/opencode-memory",
+              options: { mode: "local" },
+            },
+          ],
+        }),
+        "utf-8",
+      );
+
+      const cfg = loadConfig({
+        mode: "remote",
+        remote: { apiUrl: "https://options.example.com", apiKey: "option-key" },
+      });
+
+      expect(cfg.mode).toBe("remote");
+      expect(cfg.remote?.apiUrl).toBe("https://options.example.com");
+      expect(cfg.remote?.apiKey).toBe("option-key");
     });
   } finally {
     fs.rmSync(homeDir, { recursive: true, force: true });
@@ -401,8 +518,12 @@ test("getPluginConfigObject handles JSONC trailing comma (real-world opencode.js
       const opts = getPluginConfigObject();
       expect(opts).toBeDefined();
       expect(opts!.mode).toBe("remote");
-      expect((opts!.remote as Record<string, unknown>).apiUrl).toBe("https://mem.example.com");
-      expect((opts!.remote as Record<string, unknown>).apiKey).toBe("test-key-jsonc");
+      expect((opts!.remote as Record<string, unknown>).apiUrl).toBe(
+        "https://mem.example.com",
+      );
+      expect((opts!.remote as Record<string, unknown>).apiKey).toBe(
+        "test-key-jsonc",
+      );
     });
   } finally {
     fs.rmSync(homeDir, { recursive: true, force: true });

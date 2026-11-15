@@ -13,27 +13,46 @@
 
 </div>
 
-> **v2 已迁移到独立仓库 [devcxl/cabbage-memory](https://github.com/devcxl/cabbage-memory)。** 本仓库保留 v1 的 Markdown 记忆插件（@devcxl/opencode-memory@1.2.0）；v2 的远程记忆服务、插件（@devcxl/cabbage-memory）、MCP、pi 扩展与 Web 控制台都在新仓库维护。
+> **现面向 OpenCode V2。** `@devcxl/opencode-memory@2.0.0` 使用 V2 插件 API（`plugins` 配置、`@opencode/plugin`）。OpenCode V1 用户请继续使用 `@devcxl/opencode-memory@1.2.0`（`plugin` 配置）。远程记忆服务与 `@devcxl/cabbage-memory` 仍在新仓库 [devcxl/cabbage-memory](https://github.com/devcxl/cabbage-memory) 维护。
 
 ## 安装
 
-在 `~/.config/opencode/opencode.json` 中添加插件配置：
+在 OpenCode V2 的 `~/.config/opencode/opencode.json` 中添加插件配置：
 
-```json
+```jsonc
 {
-  "plugin": ["@devcxl/opencode-memory"]
+  "$schema": "https://opencode.ai/config.json",
+  "plugins": ["@devcxl/opencode-memory"],
 }
 ```
 
+如需传入插件 options：
+
+```jsonc
+{
+  "plugins": [
+    {
+      "package": "@devcxl/opencode-memory",
+      "options": {
+        "mode": "remote",
+        "remote": { "apiUrl": "...", "apiKey": "..." },
+      },
+    },
+  ],
+}
+```
+
+V2 中本地插件路径必须指向目录。
+
 ## 记忆文件
 
-| 文件 | 用途 |
-|------|------|
-| `MEMORY.md` | 长期记忆（关键事实、决策、偏好） |
-| `IDENTITY.md` | AI 身份（名称、人格、行为准则） |
-| `USER.md` | 用户档案（名称、偏好、上下文） |
-| `daily/YYYY-MM-DD.md` | 每日日志（日常活动记录） |
-| `BOOTSTRAP.md` | 首次运行引导说明（引导完成后删除） |
+| 文件                  | 用途                               |
+| --------------------- | ---------------------------------- |
+| `MEMORY.md`           | 长期记忆（关键事实、决策、偏好）   |
+| `IDENTITY.md`         | AI 身份（名称、人格、行为准则）    |
+| `USER.md`             | 用户档案（名称、偏好、上下文）     |
+| `daily/YYYY-MM-DD.md` | 每日日志（日常活动记录）           |
+| `BOOTSTRAP.md`        | 首次运行引导说明（引导完成后删除） |
 
 ## 存储位置
 
@@ -44,18 +63,18 @@
 
 **操作:**
 
-| 操作 | 描述 | 参数 |
-|--------|-------------|------------|
-| `read` | 读取记忆文件 | `target`: memory, identity, user, daily; `date`, `scope`（可选） |
-| `write` | 写入记忆文件 | `target`, `content`, `mode`: append/overwrite; `date`, `scope`（可选） |
-| `edit` | 编辑文件中的指定内容 | `target`, `oldString`, `newString`; `date`, `scope`（可选） |
-| `delete` | 按时间戳删除条目 | `target`, `timestamp`; `date`, `scope`（可选） |
-| `search` | 语义搜索记忆文件 | `query`, `max_results`, `period`, `scope`（可选） |
-| `list` | 列出记忆文件 | `period`（可选） |
+| 操作     | 描述                 | 参数                                                                   |
+| -------- | -------------------- | ---------------------------------------------------------------------- |
+| `read`   | 读取记忆文件         | `target`: memory, identity, user, daily; `date`, `scope`（可选）       |
+| `write`  | 写入记忆文件         | `target`, `content`, `mode`: append/overwrite; `date`, `scope`（可选） |
+| `edit`   | 编辑文件中的指定内容 | `target`, `oldString`, `newString`; `date`, `scope`（可选）            |
+| `delete` | 按时间戳删除条目     | `target`, `timestamp`; `date`, `scope`（可选）                         |
+| `search` | 语义搜索记忆文件     | `query`, `max_results`, `period`, `scope`（可选）                      |
+| `list`   | 列出记忆文件         | `period`（可选）                                                       |
 
 **示例:**
 
-使用 `--scope project` 操作当前项目记忆。projectId 从 git 自动检测；检测失败时降级为全局记忆。
+使用 `--scope project` 操作当前项目记忆。projectId 从 session 所在的项目目录通过 git 自动检测；检测失败时降级为全局记忆。
 
 ```bash
 memory --action read --target memory
@@ -81,11 +100,11 @@ memory --action write --target memory --scope project --content "Use port 5432"
 5. AI 删除 BOOTSTRAP.md
 6. 设置完成
 
-随时可通过 `/memory-init` 手动触发引导流程（仅在记忆系统未完全初始化时可用）。
+随时可通过 `/memory-init` 手动触发引导流程（命令常驻，但仅在记忆系统未完全初始化时执行）。
 
 ## 上下文注入
 
-MEMORY.md、IDENTITY.md 和 USER.md 会在会话开始时自动注入到 system prompt 中。
+MEMORY.md、IDENTITY.md 和 USER.md 会在每次模型请求前注入到 system prompt 中。
 
 每日日志需通过 `memory` 工具访问。
 

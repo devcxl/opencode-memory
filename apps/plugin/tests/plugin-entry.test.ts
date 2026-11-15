@@ -1,7 +1,5 @@
 import { beforeAll, beforeEach, expect, test, mock } from "bun:test";
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
+import { createV2Harness } from "./support/v2-plugin-harness.js";
 
 // ─── mock 模块 ────────────────────────────────────────────
 
@@ -26,6 +24,12 @@ const mockMemoryManagerConstructor = mock(
 // 测试用状态：控制 loadConfig 的返回值
 let testConfigMode: "local" | "remote" = "local";
 let testRemoteConfig: { apiUrl: string; apiKey: string } | undefined;
+
+mock.module("@opencode/plugin", () => ({
+  Plugin: {
+    define: (plugin: unknown) => plugin,
+  },
+}));
 
 mock.module("../src/config/runtime.js", () => ({
   loadConfig: () => ({
@@ -63,6 +67,7 @@ mock.module("../src/utils/projectDetector.js", () => ({
 mock.module("../src/instructions/memoryInstructions.js", () => ({
   getMemoryAwarenessInstructions: () => "",
   BOOTSTRAP_INSTRUCTIONS: "",
+  MEMORY_INIT_PROMPT: "Initialize memory.",
 }));
 
 mock.module("../src/utils/validation.js", () => ({
@@ -80,7 +85,7 @@ let MemoryPlugin: any;
 
 beforeAll(async () => {
   const mod = await import("../src/index.js");
-  MemoryPlugin = mod.MemoryPlugin;
+  MemoryPlugin = mod.default;
 });
 
 beforeEach(() => {
@@ -90,47 +95,30 @@ beforeEach(() => {
   mockMemoryManagerConstructor.mockClear();
 });
 
-test("MemoryPlugin is a function", () => {
-  expect(typeof MemoryPlugin).toBe("function");
+test("default export is a V2 plugin definition", () => {
+  expect(MemoryPlugin.id).toBe("devcxl.opencode-memory");
+  expect(typeof MemoryPlugin.setup).toBe("function");
+  expect(MemoryPlugin.server).toBeUndefined();
 });
 
-test("local mode does NOT call createProviders (backward compat)", async () => {
-  testConfigMode = "local";
+test("local mode does NOT call createProviders", async () => {
+  const harness = await createV2Harness(MemoryPlugin);
 
-  const mockCtx: any = {
-    client: { tui: { showToast: mock(async () => {}) } },
-  };
-
-  const pluginOutput = await MemoryPlugin(mockCtx);
-  expect(pluginOutput).toBeDefined();
-  expect(pluginOutput.tool).toBeDefined();
-  expect(pluginOutput.config).toBeDefined();
-
-  // local 模式下不调用 createProviders
   expect(mockCreateProviders).toHaveBeenCalledTimes(0);
+  expect(mockMemoryManagerConstructor).toHaveBeenCalledTimes(1);
+  expect(mockMemoryManagerConstructor.mock.calls[0][1]).toBeUndefined();
+
+  // V2 注册面：工具、命令、hook 都必须存在
+  expect(harness.memoryTool()).toBeDefined();
+  expect(harness.commandNames()).toContain("memory-init");
+
+  await harness.cleanup();
 });
 
-test("remote mode calls createProviders with 'remote' and config", async () => {
+test("remote mode calls createProviders and injects providers", async () => {
   testConfigMode = "remote";
   testRemoteConfig = { apiUrl: "https://mem.example.com", apiKey: "test-key" };
 
-  const mockCtx: any = {
-    client: { tui: { showToast: mock(async () => {}) } },
-  };
-
-  await MemoryPlugin(mockCtx);
-
-  // remote 模式下调用 createProviders
-  expect(mockCreateProviders).toHaveBeenCalledTimes(1);
-
-  // 验证传参：mode="remote"，config 包含 mode 和 remote
-  const calls = mockCreateProviders.mock.calls as any[];
-  expect(calls[0][0]).toBe("remote");
-  expect(calls[0][1].mode).toBe("remote");
-  expect(calls[0][1].remote).toEqual({ apiUrl: "https://mem.example.com", apiKey: "test-key" });
-});
-
-test("remote mode passes providers to MemoryManager constructor", async () => {
   const mockProviders = {
     vectorIndex: { vectorIndex: true } as any,
     embedding: { embedding: true } as any,
@@ -138,36 +126,47 @@ test("remote mode passes providers to MemoryManager constructor", async () => {
   };
   mockCreateProviders.mockReturnValueOnce(Promise.resolve(mockProviders));
 
-  testConfigMode = "remote";
-  testRemoteConfig = { apiUrl: "https://mem.example.com", apiKey: "test-key" };
+  const harness = await createV2Harness(MemoryPlugin);
 
-  const mockCtx: any = {
-    client: { tui: { showToast: mock(async () => {}) } },
-  };
+  expect(mockCreateProviders).toHaveBeenCalledTimes(1);
+  const calls = mockCreateProviders.mock.calls as any[];
+  expect(calls[0][0]).toBe("remote");
+  expect(calls[0][1].mode).toBe("remote");
+  expect(calls[0][1].remote).toEqual({
+    apiUrl: "https://mem.example.com",
+    apiKey: "test-key",
+  });
 
-  await MemoryPlugin(mockCtx);
-
-  // MemoryManager 构造函数被调用
   expect(mockMemoryManagerConstructor).toHaveBeenCalledTimes(1);
+  expect(mockMemoryManagerConstructor.mock.calls[0][1]).toBe(mockProviders);
 
-  // 第二个参数是 providers
-  const calls = mockMemoryManagerConstructor.mock.calls as any[];
-  expect(calls[0][1]).toBe(mockProviders);
+  await harness.cleanup();
 });
 
-test("local mode passes undefined providers to MemoryManager", async () => {
-  testConfigMode = "local";
+test("context hook injects memory context as a text system part", async () => {
+  mockMemoryManagerInstance.getContextFiles.mockReturnValueOnce([
+    { name: "MEMORY.md", content: "remember this" },
+  ]);
 
-  const mockCtx: any = {
-    client: { tui: { showToast: mock(async () => {}) } },
-  };
+  const harness = await createV2Harness(MemoryPlugin);
+  const system = await harness.buildSystem();
 
-  await MemoryPlugin(mockCtx);
+  expect(system).toContain("# Memory Context");
+  expect(system).toContain("remember this");
 
-  // MemoryManager 构造函数被调用
-  expect(mockMemoryManagerConstructor).toHaveBeenCalledTimes(1);
+  await harness.cleanup();
+});
 
-  // 第二个参数是 undefined（local 模式不注入 providers）
-  const calls = mockMemoryManagerConstructor.mock.calls as any[];
-  expect(calls[0][1]).toBeUndefined();
+test("execute.after records memory calls and triggers daily reminder", async () => {
+  const harness = await createV2Harness(MemoryPlugin);
+
+  await harness.triggerToolAfter("memory", {
+    action: "write",
+    target: "memory",
+  });
+
+  const system = await harness.buildSystem();
+  expect(system).toContain("Memory Reminder");
+
+  await harness.cleanup();
 });

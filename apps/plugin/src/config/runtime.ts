@@ -41,16 +41,23 @@ export function getMemoryDir(): string {
   return path.join(home, ".config", "opencode", "memory");
 }
 
-/** 获取插件配置对象（完整的嵌套 JSON 对象，而非扁平 key） */
-export function getPluginConfigObject(): Record<string, unknown> | undefined {
-  const configPath = getOpencodeConfigPath();
+/**
+ * 从配置文件中查找本插件的 options。
+ *
+ * 兼容两代配置形状：
+ * - V1: `plugin: ["pkg", ["pkg", { ... }]]`
+ * - V2: `plugins: ["pkg", { package: "pkg", options: { ... } }]`
+ *
+ * 后面的条目覆盖前面的条目。
+ */
+function findPluginOptions(
+  cfg: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  let result: Record<string, unknown> | undefined;
 
-  try {
-    const raw = fs.readFileSync(configPath, "utf-8");
-    const cfg = parseConfigFile(raw) as Record<string, unknown>;
-    if (!Array.isArray(cfg.plugin)) return undefined;
-
-    for (const entry of cfg.plugin) {
+  const legacyEntries = cfg.plugin;
+  if (Array.isArray(legacyEntries)) {
+    for (const entry of legacyEntries) {
       if (
         Array.isArray(entry) &&
         entry.length >= 2 &&
@@ -59,10 +66,40 @@ export function getPluginConfigObject(): Record<string, unknown> | undefined {
       ) {
         const opts = entry[1];
         if (opts && typeof opts === "object") {
-          return opts as Record<string, unknown>;
+          result = opts as Record<string, unknown>;
         }
       }
     }
+  }
+
+  const entries = cfg.plugins;
+  if (Array.isArray(entries)) {
+    for (const entry of entries) {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+
+      const candidate = entry as { package?: unknown; options?: unknown };
+      if (
+        typeof candidate.package === "string" &&
+        candidate.package.includes("opencode-memory") &&
+        candidate.options &&
+        typeof candidate.options === "object"
+      ) {
+        result = candidate.options as Record<string, unknown>;
+      }
+    }
+  }
+
+  return result;
+}
+
+/** 获取插件配置对象（完整的嵌套 JSON 对象，而非扁平 key） */
+export function getPluginConfigObject(): Record<string, unknown> | undefined {
+  const configPath = getOpencodeConfigPath();
+
+  try {
+    const raw = fs.readFileSync(configPath, "utf-8");
+    const cfg = parseConfigFile(raw) as Record<string, unknown>;
+    return findPluginOptions(cfg);
   } catch {}
 
   return undefined;
@@ -77,20 +114,27 @@ export function resolveEnvRef(value: string | undefined): string | undefined {
   return value;
 }
 
-/** 生成运行时配置对象，支持 opencode.json + 环境变量双重配置 */
-export function loadConfig(): MemoryConfig {
+/** 生成运行时配置对象，支持插件 options + opencode.json + 环境变量三重配置 */
+export function loadConfig(overrides?: Record<string, unknown>): MemoryConfig {
   const memoryDir = getMemoryDir();
-  const pluginOpts = getPluginConfigObject();
+  const fileOpts = getPluginConfigObject();
+  const pluginOpts: Record<string, unknown> = {
+    ...fileOpts,
+    ...overrides,
+  };
 
-  // 从 opencode.json 读取 mode
+  // 从插件配置读取 mode
   const configMode = pluginOpts?.mode as string | undefined;
 
-  // 从 opencode.json 读取 remote 嵌套配置
-  const remoteConfig = pluginOpts?.remote as Record<string, string> | undefined;
+  // remote 配置：文件配置与插件 options 做浅合并，options 优先
+  const fileRemote = fileOpts?.remote as Record<string, string> | undefined;
+  const overrideRemote = overrides?.remote as
+    Record<string, string> | undefined;
+  const remoteConfig = { ...fileRemote, ...overrideRemote };
   const configApiUrl = remoteConfig?.apiUrl;
   const configApiKeyRaw = remoteConfig?.apiKey;
 
-  // 环境变量覆盖：OPM_MODE > opencode.json > 默认 "local"
+  // 环境变量覆盖：OPM_MODE > 插件 options > opencode.json > 默认 "local"
   const effectiveMode: "local" | "remote" =
     process.env.OPM_MODE === "remote"
       ? "remote"
@@ -124,29 +168,9 @@ export function getOpencodeConfigPath(): string {
 
 /** 从 opencode 配置文件读取本插件配置选项 */
 export function getPluginConfigOption(key: string): string | undefined {
-  const configPath = getOpencodeConfigPath();
-
-  try {
-    const raw = fs.readFileSync(configPath, "utf-8");
-    const cfg = parseConfigFile(raw) as Record<string, unknown>;
-    if (!Array.isArray(cfg.plugin)) return undefined;
-
-    for (const entry of cfg.plugin) {
-      if (
-        Array.isArray(entry) &&
-        entry.length >= 2 &&
-        typeof entry[0] === "string" &&
-        entry[0].includes("opencode-memory")
-      ) {
-        const opts = entry[1];
-        if (opts && typeof opts === "object" && key in opts) {
-          return String(opts[key]);
-        }
-      }
-    }
-  } catch {}
-
-  return undefined;
+  const opts = getPluginConfigObject();
+  if (!opts || !(key in opts)) return undefined;
+  return String(opts[key]);
 }
 
 /** 检测系统 locale 是否为中文 */

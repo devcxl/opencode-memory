@@ -78,17 +78,10 @@ mock.module("../src/search/vector-store.js", () => ({
   },
 }));
 
-mock.module("@opencode-ai/plugin", () => ({
-  tool: Object.assign((definition: any) => definition, {
-    schema: {
-      enum: () => ({
-        optional: () => ({ describe: () => ({}) }),
-        describe: () => ({}),
-      }),
-      number: () => ({ optional: () => ({ describe: () => ({}) }) }),
-      string: () => ({ optional: () => ({ describe: () => ({}) }) }),
-    },
-  }),
+mock.module("@opencode/plugin", () => ({
+  Plugin: {
+    define: (plugin: unknown) => plugin,
+  },
 }));
 
 // 在 mock 之前保存真实 detectProject，供 L2 测试直接调用（绕过 CI 中 mock 跨文件污染）
@@ -107,7 +100,8 @@ const { handleEdit } = await import("../src/handlers/handleEdit.js");
 const { handleDelete } = await import("../src/handlers/handleDelete.js");
 const { handleSearch } = await import("../src/handlers/handleSearch.js");
 const { resolveProjectId } = await import("../src/utils/defaultProject.js");
-const { MemoryPlugin } = await import("../src/index.js");
+const { default: MemoryPlugin } = await import("../src/index.js");
+const { createV2Harness } = await import("./support/v2-plugin-harness.js");
 const { gitCommit } = await import("../src/utils/git.js");
 
 beforeEach(() => {
@@ -403,9 +397,9 @@ test("memory writes default to the detected project when project is omitted", as
 
 test("memory tool writes default to the detected project when project is omitted", async () => {
   await withTempMemory(async (memoryDir) => {
-    const hooks = await MemoryPlugin({} as any);
+    const harness = await createV2Harness(MemoryPlugin);
 
-    await hooks.tool!.memory.execute({
+    await harness.executeMemory({
       action: "write",
       target: "memory",
       content: "## Project\nplugin default project content",
@@ -415,14 +409,16 @@ test("memory tool writes default to the detected project when project is omitted
       path.join(memoryDir, "projects", "owner", "repo", "MEMORY.md"),
     );
     expect(fs.existsSync(path.join(memoryDir, "MEMORY.md"))).toBe(false);
+
+    await harness.cleanup();
   });
 });
 
 test("memory tool writes to global memory when scope is global", async () => {
   await withTempMemory(async (memoryDir) => {
-    const hooks = await MemoryPlugin({} as any);
+    const harness = await createV2Harness(MemoryPlugin);
 
-    await hooks.tool!.memory.execute({
+    await harness.executeMemory({
       action: "write",
       target: "memory",
       scope: "global",
@@ -435,6 +431,8 @@ test("memory tool writes to global memory when scope is global", async () => {
         path.join(memoryDir, "projects", "owner", "repo", "MEMORY.md"),
       ),
     ).toBe(false);
+
+    await harness.cleanup();
   });
 });
 
@@ -455,14 +453,16 @@ test("memory tool reads default to the detected project when project is omitted"
     );
     fs.writeFileSync(projectMemoryPath, "project content", "utf-8");
 
-    const hooks = await MemoryPlugin({} as any);
-    const result = await hooks.tool!.memory.execute({
+    const harness = await createV2Harness(MemoryPlugin);
+    const result = await harness.executeMemory({
       action: "read",
       target: "memory",
     });
 
     expect(result).toStartWith("[scope: project/owner/repo]");
     expect(result).toContain("project content");
+
+    await harness.cleanup();
   });
 });
 
@@ -483,7 +483,9 @@ test("resolveProjectId handles scope correctly", () => {
 });
 
 // 创建 mock IFileStorageProvider，适配 FileSearcher 的新接口
-function makeMockFileStorage(): { readFile: (filePath: string) => Promise<string | null> } {
+function makeMockFileStorage(): {
+  readFile: (filePath: string) => Promise<string | null>;
+} {
   return {
     readFile: async (filePath: string) => {
       try {
@@ -1464,7 +1466,9 @@ test("checkLineLimit throws for remote learning:knowledge path over limit", asyn
 test("checkLineLimit does not throw for remote daily path over limit", async () => {
   const { checkLineLimit } = await import("../src/utils/validation.js");
   const overLimit = Array.from({ length: 1001 }, () => "x").join("\n");
-  expect(() => checkLineLimit("daily::global::2026-08-07", overLimit)).not.toThrow();
+  expect(() =>
+    checkLineLimit("daily::global::2026-08-07", overLimit),
+  ).not.toThrow();
 });
 
 test("checkLineLimit does not throw within limit", async () => {
@@ -1477,12 +1481,10 @@ test("checkLineLimit does not throw within limit", async () => {
 // =============================================================================
 
 test("remote semanticSearch dedupes global and project results by id", async () => {
-  const { RemoteFileStorageProvider } = await import(
-    "../src/providers/remote/FileStorageProvider.js"
-  );
-  const { FileSearcher: FileSearcherCls } = await import(
-    "../src/memory/FileSearcher.js"
-  );
+  const { RemoteFileStorageProvider } =
+    await import("../src/providers/remote/FileStorageProvider.js");
+  const { FileSearcher: FileSearcherCls } =
+    await import("../src/memory/FileSearcher.js");
 
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async (
