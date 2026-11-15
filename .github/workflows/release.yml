@@ -140,6 +140,17 @@ jobs:
           TAG: ${{ steps.package.outputs.tag }}
         run: git push origin "$TAG"
 
+      # GITHUB_TOKEN 推送 tag 不会触发其它 workflow（包括 Draft Release），
+      # 因此由本 workflow 直接创建 draft release，避免发布链断掉。
+      - name: Create or update draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.package.outputs.tag }}
+          name: Release ${{ steps.package.outputs.tag }}
+          draft: true
+          prerelease: ${{ steps.package.outputs.prerelease == 'true' }}
+          generate_release_notes: true
+
       - name: Write summary
         env:
           TAG: ${{ steps.package.outputs.tag }}
@@ -157,6 +168,5 @@ jobs:
             echo "- npm dist-tag: \`${DIST_TAG}\`"
             echo "- Prerelease: \`${PRERELEASE}\`"
             echo ""
-            echo "已推送 tag。接下来会由 \`Draft Release\` workflow 自动创建 GitHub draft release，"
-            echo "并按同一规则（tag 含 \`-\`）标记 \`prerelease: ${PRERELEASE}\`。"
+            echo "已推送 tag 并创建 draft release。人工发布 draft 后将触发 npm publish。"
           } >> "$GITHUB_STEP_SUMMARY"
