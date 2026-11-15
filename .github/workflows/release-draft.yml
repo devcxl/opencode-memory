@@ -1,5 +1,10 @@
 name: Draft Release
 
+# 触发：推送 v* tag 后创建 draft release，由人工决定何时发布（release published 才会触发 npm 发布）。
+#
+# RC 标记：tag 含 `-`（例如 v2.0.0-rc.1）时自动标记 prerelease，
+# 否则 RC 会被 GitHub 当成 Latest Release，与 npm 的 latest 语义冲突。
+# 这里不重复跑测试：tag 由 `Release` workflow 在测试通过后创建，npm 发布前 `Publish to npm` 会再跑一次。
 on:
   push:
     tags:
@@ -21,6 +26,15 @@ jobs:
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+
+      - name: Detect release tree layout
+        run: |
+          if [ ! -f apps/plugin/package.json ]; then
+            echo "::error::该 tag 不是 V2 仓库布局（缺少 apps/plugin/package.json）。1.x 维护发布请按 v1 分支的手动发布流程执行，不经过本 workflow。"
+            exit 1
+          fi
 
       - name: Read package version
         id: package
@@ -44,4 +58,6 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: Release ${{ github.ref_name }}
           draft: true
+          # tag 含 `-`（2.0.0-rc.1 / 2.1.0-beta.1 等）即为 prerelease
+          prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true

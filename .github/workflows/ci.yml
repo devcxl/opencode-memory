@@ -1,5 +1,7 @@
 name: CI
 
+# 工具链版本固定：pnpm 11.28.4（与根 package.json 的 packageManager 一致）、Bun 1.4.4、Node 24。
+# 版本漂移会直接改变测试结果（Bun 1.4.4 曾暴露测试 mock 跨文件污染），因此不在 workflow 里用 latest。
 on:
   pull_request:
   push:
@@ -21,10 +23,12 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 11.28.4
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
