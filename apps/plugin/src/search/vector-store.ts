@@ -1,15 +1,31 @@
-import { LocalIndex } from "vectra";
+import type { LocalIndex } from "vectra";
 import * as path from "node:path";
 import { getMemoryDir } from "../config/runtime.js";
 import { MemoryPaths } from "../memory/MemoryPaths.js";
 import { getCurrentDtype, getCurrentModelId } from "./embedding.js";
 
-// ─── 全局索引实例（单例） ──────────────────────────────────────
+// ─── 索引实例（单例） ──────────────────────────────────────
 
 const memoryPaths = new MemoryPaths(getMemoryDir());
 
 let rootIndex: LocalIndex | null = null;
 let dailyIndex: LocalIndex | null = null;
+
+/**
+ * 打开（必要时创建）一个 vectra 本地索引。
+ *
+ * `vectra` 是 optionalDependency，静态 import 会让整个插件模块在缺失该包时直接
+ * 加载失败。这里改为首次访问索引时动态加载，让 setup 里的可选依赖检查先给出统一、
+ * 可操作的错误。
+ */
+async function openIndex(indexPath: string): Promise<LocalIndex> {
+  const { LocalIndex: LocalIndexCtor } = await import("vectra");
+  const index = new LocalIndexCtor(indexPath);
+  if (!(await index.isIndexCreated())) {
+    await index.createIndex();
+  }
+  return index;
+}
 
 function getRootIndexPath(): string {
   return memoryPaths.rootIndexPath;
@@ -22,10 +38,7 @@ function getDailyIndexPath(): string {
 /** 获取 root 索引，首次访问时自动初始化本地索引文件 */
 async function getRootIndex(): Promise<LocalIndex> {
   if (!rootIndex) {
-    rootIndex = new LocalIndex(getRootIndexPath());
-    if (!(await rootIndex.isIndexCreated())) {
-      await rootIndex.createIndex();
-    }
+    rootIndex = await openIndex(getRootIndexPath());
   }
   return rootIndex;
 }
@@ -33,10 +46,7 @@ async function getRootIndex(): Promise<LocalIndex> {
 /** 获取 daily 索引，首次访问时自动初始化本地索引文件 */
 async function getDailyIndex(): Promise<LocalIndex> {
   if (!dailyIndex) {
-    dailyIndex = new LocalIndex(getDailyIndexPath());
-    if (!(await dailyIndex.isIndexCreated())) {
-      await dailyIndex.createIndex();
-    }
+    dailyIndex = await openIndex(getDailyIndexPath());
   }
   return dailyIndex;
 }
@@ -316,11 +326,7 @@ export class ProjectStore {
    */
   async getIndex(): Promise<LocalIndex> {
     if (!this.rootIndex) {
-      const indexPath = path.join(this.basePath, "root.index");
-      this.rootIndex = new LocalIndex(indexPath);
-      if (!(await this.rootIndex.isIndexCreated())) {
-        await this.rootIndex.createIndex();
-      }
+      this.rootIndex = await openIndex(path.join(this.basePath, "root.index"));
     }
     return this.rootIndex;
   }
