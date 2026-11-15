@@ -1,16 +1,18 @@
-name: Draft Release
+name: Draft Release V1
 
+# V1 tag push 时创建 GitHub draft release；只处理 v1.x tag。
+# V1 的 npm 发布由 Publish V1 workflow 手动/发布触发，不使用 V2 的 apps/plugin 布局。
 on:
   push:
     tags:
-      - "v*"
+      - "v1.*"
 
 permissions:
   contents: write
 
 jobs:
   draft-release:
-    name: 根据 tag 创建发布草稿
+    name: 根据 V1 tag 创建发布草稿
     runs-on: ubuntu-latest
 
     steps:
@@ -21,6 +23,15 @@ jobs:
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+
+      - name: Validate V1 layout
+        run: |
+          if [ ! -f bun.lock ] || [ ! -f src/index.ts ]; then
+            echo "::error::该 tag 不是 V1 仓库布局（缺少 bun.lock 或 src/index.ts）"
+            exit 1
+          fi
 
       - name: Read package version
         id: package
@@ -44,4 +55,5 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: Release ${{ github.ref_name }}
           draft: true
+          prerelease: false
           generate_release_notes: true

@@ -1,6 +1,17 @@
-name: Publish to npm
+name: Publish V1 to npm
 
+# V1 维护线（v1 分支）的独立发布流水线：
+# - V1 树是根 package.json + src，不使用 V2 的 apps/plugin 布局；
+# - 只允许 v1.x tag；
+# - 发布到 npm 的 latest，V2 仍由 main 分支的流水线发到 v2/rc。
 on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: V1 tag to publish (must match package.json version)
+        required: true
+        default: v1.2.1
+        type: string
   release:
     types:
       - published
@@ -10,88 +21,108 @@ permissions:
 
 jobs:
   publish:
-    name: 发布到 npm registry
+    name: 发布 V1 到 npm registry
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout release tag
+      - name: Checkout V1 tag
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ inputs.tag || github.event.release.tag_name }}
           fetch-depth: 0
+
+      - name: Validate V1 tag, version and layout
+        env:
+          TAG: ${{ inputs.tag || github.event.release.tag_name }}
+        run: |
+          case "$TAG" in
+            v1.*) ;;
+            *) echo "::error::Only v1.x tags may use this workflow (got $TAG)"; exit 1 ;;
+          esac
+
+          VERSION=$(node -p "require('./package.json').version")
+          if [ "v$VERSION" != "$TAG" ]; then
+            echo "::error::Tag $TAG does not match package.json version v$VERSION"
+            exit 1
+          fi
+
+          if [ ! -f bun.lock ] || [ ! -f src/index.ts ]; then
+            echo "::error::This is not a V1 repository layout (missing bun.lock or src/index.ts)"
+            exit 1
+          fi
+
+      - name: Ensure tag is on v1 maintenance branch
+        env:
+          TAG: ${{ inputs.tag || github.event.release.tag_name }}
+        run: |
+          git fetch origin v1
+          SHA=$(git rev-parse "${TAG}^{commit}")
+          if ! git merge-base --is-ancestor "$SHA" "origin/v1"; then
+            echo "::error::Tag $TAG is not on origin/v1"
+            exit 1
+          fi
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
 
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Read package version
-        id: package
-        run: |
-          VERSION=$(bun -e "console.log(JSON.parse(require('node:fs').readFileSync('package.json', 'utf8')).version)")
-          DIST_TAG=$(bun -e "const version = JSON.parse(require('node:fs').readFileSync('package.json', 'utf8')).version; const prerelease = version.split('-')[1]; console.log(prerelease ? prerelease.split('.')[0] : 'latest')")
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "dist_tag=${DIST_TAG}" >> "$GITHUB_OUTPUT"
-
-      - name: Validate release tag matches package version
-        env:
-          EXPECTED_TAG: v${{ steps.package.outputs.version }}
-          CURRENT_TAG: ${{ github.event.release.tag_name }}
-        run: |
-          if [ "$CURRENT_TAG" != "$EXPECTED_TAG" ]; then
-            echo "::error::GitHub Release tag ($CURRENT_TAG) 与 package.json 版本不一致，期望为 $EXPECTED_TAG"
-            exit 1
-          fi
-
-      - name: Ensure release commit is reachable from default branch
-        env:
-          CURRENT_TAG: ${{ github.event.release.tag_name }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-        run: |
-          git fetch origin "$DEFAULT_BRANCH"
-          RELEASE_SHA=$(git rev-list -n 1 "$CURRENT_TAG")
-
-          if ! git merge-base --is-ancestor "$RELEASE_SHA" "origin/$DEFAULT_BRANCH"; then
-            echo "::error::Release tag ($CURRENT_TAG) 对应提交不在 origin/$DEFAULT_BRANCH 提交链上，拒绝发布到 npm"
-            exit 1
-          fi
-
-      - name: Run typecheck
-        run: bun run typecheck
-
-      - name: Run format check
-        run: bun run format:check
-
-      - name: Build package
-        run: bun run build
-
-      - name: Check npm package contents
-        run: bun pm pack --dry-run --ignore-scripts
-
-      - name: Setup Node.js for npm publish
+      - name: Setup Node.js for npm
         uses: actions/setup-node@v4
         with:
           node-version: "24"
           registry-url: https://registry.npmjs.org
 
-      - name: Publish to npm registry
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Test
+        run: bun test
+
+      - name: Format check
+        run: bun run format:check
+
+      - name: Build package
+        run: bun run build
+
+      - name: Check package contents
+        run: bun pm pack --dry-run --ignore-scripts
+
+      - name: Publish V1 to latest
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          DIST_TAG: ${{ steps.package.outputs.dist_tag }}
-        run: npm publish --ignore-scripts --tag "$DIST_TAG"
+        run: npm publish --ignore-scripts --access public --tag latest
 
-      - name: Write summary
+      - name: Verify npm dist-tags
         env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-          RELEASE_NAME: ${{ github.event.release.name }}
-          DIST_TAG: ${{ steps.package.outputs.dist_tag }}
+          PKG: "@devcxl/opencode-memory"
+          TAG: ${{ inputs.tag || github.event.release.tag_name }}
+        run: |
+          VERSION="${TAG#v}"
+          npm view "$PKG" dist-tags --json > "$RUNNER_TEMP/dist-tags.json"
+          node -e '
+            const fs = require("node:fs");
+            const tags = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + "/dist-tags.json", "utf8"));
+            if (tags.latest !== process.env.VERSION) {
+              console.error(`::error::latest=${tags.latest}, expected ${process.env.VERSION}`);
+              process.exit(1);
+            }
+            if (tags.v2 && !/^2\./.test(tags.v2)) {
+              console.error(`::error::v2=${tags.v2} is not a 2.x version`);
+              process.exit(1);
+            }
+            console.log("dist-tags:", JSON.stringify(tags));
+          '
+
+      - name: Summary
         run: |
           {
-            echo "## npm publish completed"
+            echo "## V1 publish completed"
             echo ""
-            echo "- Release: \`${RELEASE_NAME}\`"
-            echo "- Tag: \`${RELEASE_TAG}\`"
-            echo "- npm dist-tag: \`${DIST_TAG}\`"
-            echo "- Registry: \`https://registry.npmjs.org/\`"
+            echo "- Tag: \`${{ inputs.tag || github.event.release.tag_name }}\`"
+            echo "- npm tag: \`latest\`"
+            echo "- Package: \`@devcxl/opencode-memory\`"
           } >> "$GITHUB_STEP_SUMMARY"
