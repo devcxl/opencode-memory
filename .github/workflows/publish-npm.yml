@@ -1,12 +1,21 @@
 name: Publish to npm
 
+# 触发：人工把 draft release 发布后，按 release tag 发布对应版本到 npm。
+#
+# dist-tag 策略（唯一实现在 apps/plugin/src/release/distTag.ts）：
+#   1.x  → latest（V1 线，永久占据 latest）
+#   2.x  → v2（稳定） / rc（prerelease）
+# 发布后必须回读 registry 校验 version 与 dist-tags；latest 被切到 2.x 属于 S1 事故。
 on:
   release:
     types:
       - published
 
+# id-token: write 供 npm provenance 使用（sigstore 签名，用户可 `npm audit signatures` 校验来源）。
+# 仓库是 public + GitHub 托管 runner + 包 repository 字段与仓库 URL 一致，满足 provenance 前提。
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   publish:
@@ -20,13 +29,32 @@ jobs:
           ref: ${{ github.event.release.tag_name }}
           fetch-depth: 0
 
+      # 发布策略（dist-tag、允许的基底分支、registry 校验）始终取自默认分支：
+      # 1.x 维护 tag 的树是 V1 布局，里面没有这些脚本，但必须按当前规则执行。
+      - name: Checkout release tooling (default branch)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: .release-tooling
+          sparse-checkout: apps/plugin/src/release
+          fetch-depth: 1
+
+      - name: Detect release tree layout
+        run: |
+          if [ ! -f apps/plugin/package.json ]; then
+            echo "::error::检出的 tag 不是 V2 仓库布局（缺少 apps/plugin/package.json）。1.x 维护发布请按 v1 分支的手动发布流程执行，不经过本 workflow。"
+            exit 1
+          fi
+
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 11.28.4
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -36,7 +64,8 @@ jobs:
         run: |
           VERSION=$(bun -e "console.log(JSON.parse(require('node:fs').readFileSync('apps/plugin/package.json', 'utf8')).version)")
           # dist-tag 规则只有一处实现：apps/plugin/src/release/distTag.ts
-          DIST_TAG=$(bun apps/plugin/src/release/distTagCli.ts "$VERSION")
+          # 通过 .release-tooling 执行默认分支上的最新规则，不在 workflow 里重复判断版本
+          DIST_TAG=$(bun .release-tooling/apps/plugin/src/release/distTagCli.ts "$VERSION")
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "dist_tag=${DIST_TAG}" >> "$GITHUB_OUTPUT"
 
@@ -50,21 +79,36 @@ jobs:
             exit 1
           fi
 
-      - name: Ensure release commit is reachable from default branch
+      # tag 的祖先校验：1.x 允许来自 v1 维护分支（含 main）；2.x 只能是 main。
+      # 规则唯一实现在 apps/plugin/src/release/releaseBaseRefs.ts，这里只做 git 判断。
+      - name: Ensure release commit is on an allowed base branch
         env:
+          VERSION: ${{ steps.package.outputs.version }}
           CURRENT_TAG: ${{ github.event.release.tag_name }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
-          git fetch origin "$DEFAULT_BRANCH"
-          RELEASE_SHA=$(git rev-list -n 1 "$CURRENT_TAG")
+          ALLOWED_REFS=$(bun .release-tooling/apps/plugin/src/release/releaseBaseRefsCli.ts "$VERSION")
+          RELEASE_SHA=$(git rev-parse "${CURRENT_TAG}^{commit}")
 
-          if ! git merge-base --is-ancestor "$RELEASE_SHA" "origin/$DEFAULT_BRANCH"; then
-            echo "::error::Release tag ($CURRENT_TAG) 对应提交不在 origin/$DEFAULT_BRANCH 提交链上，拒绝发布到 npm"
-            exit 1
-          fi
+          for REF in $ALLOWED_REFS; do
+            if ! git fetch --no-tags origin "refs/heads/${REF}:refs/remotes/origin/${REF}" 2>/dev/null; then
+              echo "提示：origin/${REF} 不存在，跳过"
+              continue
+            fi
+
+            if git merge-base --is-ancestor "$RELEASE_SHA" "origin/${REF}"; then
+              echo "✓ ${CURRENT_TAG}（${VERSION}）的提交在 origin/${REF} 上"
+              exit 0
+            fi
+          done
+
+          echo "::error::Release tag ($CURRENT_TAG, version $VERSION) 的提交不在允许的基底分支上（允许：$ALLOWED_REFS）。2.x 必须来自 main；只有 1.x 允许来自 v1 维护线。"
+          exit 1
 
       - name: Run typecheck
         run: pnpm typecheck
+
+      - name: Run tests (plugin)
+        run: pnpm --filter @devcxl/opencode-memory test
 
       - name: Run format check
         run: pnpm format:check
@@ -92,12 +136,43 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           DIST_TAG: ${{ steps.package.outputs.dist_tag }}
-        run: npm publish --ignore-scripts --tag "$DIST_TAG"
+        run: |
+          # --provenance：由 GitHub OIDC 生成 sigstore 签名，用户可用 `npm audit signatures` 校验。
+          # --access public：scoped public 包的首次发布必须显式声明，之后也保证不会误发成 private。
+          # 应急路径：若 registry/OIDC 侧导致 provenance 不可用，去掉 --provenance 重跑，并在 incident issue 记录原因。
+          npm publish --ignore-scripts --provenance --access public --tag "$DIST_TAG"
+
+      - name: Verify published version and dist-tags
+        env:
+          PKG: "@devcxl/opencode-memory"
+          VERSION: ${{ steps.package.outputs.version }}
+          DIST_TAG: ${{ steps.package.outputs.dist_tag }}
+        run: |
+          # registry 是最终事实来源：发布后回读 version 与 dist-tags。
+          # 期望：本次版本已上线；dist-tag 指向本次版本；latest 仍指 V1；v2 只指 2.x 稳定版；rc 只指 2.x prerelease。
+          PUBLISHED_VERSION=""
+          for attempt in 1 2 3 4 5 6; do
+            if PUBLISHED_VERSION=$(npm view "${PKG}@${VERSION}" version 2>/dev/null); then
+              break
+            fi
+            echo "registry 尚未返回 ${VERSION}（第 ${attempt} 次），10s 后重试"
+            sleep 10
+          done
+
+          if [ "$PUBLISHED_VERSION" != "$VERSION" ]; then
+            echo "::error::registry 上读不到 ${PKG}@${VERSION}（最后读到 \"${PUBLISHED_VERSION}\"）"
+            exit 1
+          fi
+
+          npm view "$PKG" dist-tags --json > "$RUNNER_TEMP/dist-tags.json"
+          bun .release-tooling/apps/plugin/src/release/verifyDistTagsCli.ts \
+            "$VERSION" "$DIST_TAG" "$RUNNER_TEMP/dist-tags.json"
 
       - name: Write summary
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
           RELEASE_NAME: ${{ github.event.release.name }}
+          VERSION: ${{ steps.package.outputs.version }}
           DIST_TAG: ${{ steps.package.outputs.dist_tag }}
         run: |
           {
@@ -105,6 +180,10 @@ jobs:
             echo ""
             echo "- Release: \`${RELEASE_NAME}\`"
             echo "- Tag: \`${RELEASE_TAG}\`"
+            echo "- Version: \`${VERSION}\`"
             echo "- npm dist-tag: \`${DIST_TAG}\`"
+            echo "- Provenance: enabled (\`--provenance --access public\`)"
             echo "- Registry: \`https://registry.npmjs.org/\`"
+            echo ""
+            echo "已回读 registry 校验 version 与 dist-tags（latest 保持 V1，v2/rc 只承接 2.x）。"
           } >> "$GITHUB_STEP_SUMMARY"
