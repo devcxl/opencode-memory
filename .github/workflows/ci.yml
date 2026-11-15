@@ -46,9 +46,6 @@ jobs:
       - name: Build plugin
         run: pnpm --filter @devcxl/opencode-memory build
 
-      - name: Build web
-        run: pnpm --filter @devcxl/opencode-memory-web build
-
       - name: Check npm package contents
         working-directory: apps/plugin
         run: npm pack --dry-run --ignore-scripts

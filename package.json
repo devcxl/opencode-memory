@@ -1,15 +1,12 @@
 {
   "name": "opencode-memory",
   "version": "2.0.0",
-  "description": "Monorepo for the opencode-memory plugin, its Cloudflare Workers backend and web dashboard",
+  "description": "Local-only Markdown memory plugin for OpenCode V2",
   "private": true,
   "type": "module",
   "scripts": {
     "build": "pnpm --filter @devcxl/opencode-memory build",
-    "build:web": "pnpm --filter @devcxl/opencode-memory-web build",
     "dev": "pnpm --filter @devcxl/opencode-memory dev",
-    "dev:api": "pnpm --filter @devcxl/opencode-memory-api dev",
-    "deploy:api": "pnpm --filter @devcxl/opencode-memory-api deploy",
     "typecheck": "pnpm -r run typecheck",
     "test": "pnpm -r run test",
     "format": "prettier --write \"apps/plugin/src/**/*.ts\"",
@@ -18,10 +15,7 @@
   },
   "license": "MIT",
   "devDependencies": {
-    "hono": "^4.12.0",
     "husky": "^9.1.7",
-    "jose": "^5.10.0",
-    "prettier": "^3.8.1",
-    "tsx": "^4.19.0"
+    "prettier": "^3.8.1"
   }
 }
