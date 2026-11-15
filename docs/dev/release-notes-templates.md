@@ -141,7 +141,7 @@ https://github.com/devcxl/opencode-memory/blob/main/docs/migration-v2.md
 ## 3. 模板：`2.0.0`（stable）
 
 发布对象：`v2`。GitHub Release 名称：`v2.0.0`，不勾 prerelease。
-发布前提：RC 观察窗口（7 天）结束、无未关闭 S1/S2、验收清单完成。
+发布前提：RC 观察窗口（7 天）结束、无未关闭 S1/S2、[RC 验收清单](./release-checklist.md) 全部阻塞项通过。
 
 ````md
 ## OpenCode V2 local-only stable

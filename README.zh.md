@@ -179,7 +179,7 @@ opencode-memory/
 ├── docs/
 │   ├── migration-v2.md # V1 → V2 迁移、降级与排查
 │   ├── adr/            # 架构决策记录
-│   └── dev/            # 架构流程、发布说明模板、回滚 runbook
+│   └── dev/            # 架构流程、发布说明模板、回滚 runbook、RC 验收清单
 └── package.json        # workspace 根（private）
 ```
 
@@ -187,6 +187,7 @@ opencode-memory/
 
 - [迁移指南：V1 → V2](./docs/migration-v2.md) · [Migration guide](./docs/migration-v2.md)
 - [架构流程（local-only）](./docs/dev/architecture-flow.md)
+- [RC 验收清单与安装 smoke 指南](./docs/dev/release-checklist.md)
 - [ADR：OpenCode V2-only 2.0.0](./docs/adr/2026-11-15-opencode-v2-only.md)
 
 ## 许可证
