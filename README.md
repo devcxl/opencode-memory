@@ -189,7 +189,7 @@ opencode-memory/
 ├── docs/
 │   ├── migration-v2.md # V1 → V2 upgrade, downgrade, troubleshooting
 │   ├── adr/            # Architecture decision records
-│   └── dev/            # Architecture flow, release notes, rollback runbook
+│   └── dev/            # Architecture flow, release notes, rollback runbook, RC checklist
 └── package.json        # workspace root (private)
 ```
 
@@ -197,6 +197,7 @@ opencode-memory/
 
 - [Migration guide: V1 → V2](./docs/migration-v2.md) · [迁移指南](./docs/migration-v2.md)
 - [Architecture flow (local-only)](./docs/dev/architecture-flow.md)
+- [RC acceptance checklist (release gate)](./docs/dev/release-checklist.md)
 - [ADR: OpenCode V2-only 2.0.0](./docs/adr/2026-11-15-opencode-v2-only.md)
 
 ## License
