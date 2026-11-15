@@ -166,7 +166,6 @@ export class MemoryManager {
     project?: string | null,
     category?: string,
     subType?: string,
-    _scope?: string,
   ): {
     filePath: string;
     displayName: string;

@@ -20,7 +20,6 @@ export async function handleWrite(
     project?: string;
     category?: string;
     sub_type?: string;
-    scope?: string;
     title?: string;
     path_pattern?: string;
   },
@@ -34,7 +33,6 @@ export async function handleWrite(
     project,
     category,
     sub_type,
-    scope,
     title,
     path_pattern,
   } = params;
@@ -61,7 +59,6 @@ export async function handleWrite(
       project || undefined,
       category,
       sub_type,
-      scope,
     );
 
     const effectiveContent = title ? `## ${title}\n${content}` : content;
