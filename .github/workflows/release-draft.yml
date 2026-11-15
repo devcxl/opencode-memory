@@ -15,6 +15,8 @@ permissions:
 
 jobs:
   draft-release:
+    # 1.x 是 V1 布局，不在 V2 流水线里；1.2.1 由维护者手动创建 release 并手动 npm publish。
+    if: ${{ !startsWith(github.ref_name, 'v1.') }}
     name: 根据 tag 创建发布草稿
     runs-on: ubuntu-latest
 
