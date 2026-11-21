@@ -12,6 +12,7 @@ import { DEFAULT_MEMORY_LIMITS } from "../config/runtime.js";
 import { ensureDir, readFileSafe } from "../utils/fs.js";
 import { atomicWrite } from "../utils/atomicWrite.js";
 import { KeyedAsyncMutex } from "../utils/asyncMutex.js";
+import { BackgroundSyncQueue } from "../utils/backgroundQueue.js";
 import { MemoryPaths } from "./MemoryPaths.js";
 import {
   checkCharBudget,
@@ -45,6 +46,7 @@ export class MemoryManager {
   private fileSearcher: FileSearcher;
   private freshIndexPromise: Promise<void> | null = null;
   private readonly fileLocks = new KeyedAsyncMutex();
+  private readonly syncQueue: BackgroundSyncQueue;
 
   constructor(config: MemoryConfig) {
     this.config = config;
@@ -55,6 +57,9 @@ export class MemoryManager {
       config.memoryDir,
       this.paths.dailyDir,
       this.vectorStore,
+    );
+    this.syncQueue = new BackgroundSyncQueue((filePath, operation) =>
+      this.runBackgroundSync(filePath, operation),
     );
   }
 
@@ -451,18 +456,48 @@ export class MemoryManager {
     }
   }
 
-  /** 写入文件、更新向量索引、提交 git 三合一操作 */
+  /**
+   * 写入文件后立即返回，并将向量索引更新与 Git 提交放入带栅栏的后台异步队列。
+   * 同步落盘的 Markdown 文件作为 SSOT 立即可读；调用 `flush()` 或 `semanticSearch()` 会等待队列完成。
+   */
   private async persistAndIndex(
     filePath: string,
     content: string,
     operation: string,
   ): Promise<void> {
     atomicWrite(filePath, content);
+    this.syncQueue.enqueue(filePath, operation);
+  }
 
-    await this.embedAndIndex(filePath, content);
+  /** 在后台串行更新指定文件的派生向量索引与 Git 审计记录（彼此错误隔离） */
+  private async runBackgroundSync(
+    filePath: string,
+    operation: string,
+  ): Promise<void> {
+    const latestContent = readFileSafe(filePath);
+    if (latestContent !== null) {
+      try {
+        await this.embedAndIndex(filePath, latestContent);
+      } catch (err) {
+        console.error(
+          `[opencode-memory] Background vector indexing failed for ${filePath}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
 
-    // 向量索引为可重建的派生数据，仅追踪 Markdown 源文件
-    await gitCommit(operation, filePath, this.config.memoryDir);
+    try {
+      // 向量索引为可重建的派生数据，仅追踪 Markdown 源文件
+      await gitCommit(operation, filePath, this.config.memoryDir);
+    } catch (err) {
+      console.error(
+        `[opencode-memory] Background git commit failed for ${filePath}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /** 显式等待所有后台向量索引与 Git 提交任务完成 */
+  async flush(): Promise<void> {
+    await this.syncQueue.flush();
   }
 
   /** 删除文件，忽略文件不存在的错误 */
@@ -506,7 +541,7 @@ export class MemoryManager {
     return files;
   }
 
-  /** 委托给 FileSearcher：语义搜索 */
+  /** 委托给 FileSearcher：语义搜索（检索前先等待待建后台索引队列收敛） */
   async semanticSearch(
     query: string,
     maxResults: number = 20,
@@ -514,6 +549,7 @@ export class MemoryManager {
     projectId?: string | null,
     scope: "all" | "global" | "project" = "all",
   ): Promise<SemanticSearchResult[]> {
+    await this.flush();
     return this.fileSearcher.semanticSearch(
       query,
       maxResults,

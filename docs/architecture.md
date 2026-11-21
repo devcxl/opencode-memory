@@ -51,6 +51,7 @@ flowchart TB
         BM25["search/bm25.ts<br/>纯 TS BM25 词法打分 + 30d 半衰期衰减 + MMR 去重"]
         VEC["search/vector-store.ts (VectorStore)<br/>vectra LocalIndex 索引锁 / Hash 预检 / 增量 upsert / stale 清理"]
         MUTEX["utils/asyncMutex.ts<br/>KeyedAsyncMutex 文件/索引/Git 互斥锁"]
+        BGQ["utils/backgroundQueue.ts<br/>BackgroundSyncQueue 带栅栏异步索引/Git 队列"]
         ATOMIC["utils/atomicWrite.ts<br/>pid+UUID tmp + rename 原子落盘"]
         GIT["utils/git.ts<br/>ensureGitRepo + gitCommit (仅追踪 .md)"]
     end
@@ -80,7 +81,7 @@ flowchart TB
     HOOK_CMP --> MM & RESOLVER & CTX_CACHE
     CMD --> BOOT & MM & RESOLVER & CTX_CACHE
 
-    MM --> PATHS & SEARCHER & VEC & ATOMIC & GIT & CHUNKER & EMB & MUTEX
+    MM --> PATHS & SEARCHER & VEC & ATOMIC & GIT & CHUNKER & EMB & MUTEX & BGQ
     SEARCHER --> EMB & VEC & BM25 & CHUNKER
 
     ATOMIC --> D_GLOBAL & D_PROJ
@@ -237,7 +238,7 @@ sequenceDiagram
 
 #### 存储链路关键机制
 
-1. **进程内并发互斥锁与原子写入**：`KeyedAsyncMutex` 按文件路径、索引目录与 Git 仓库加锁串行化读-改-写；`atomicWrite()` 使用 `${filePath}.tmp.${process.pid}.${crypto.randomUUID()}` 临时文件后 `fs.renameSync()` 原子替换，异常时自动清理临时文件。
+1. **进程内并发互斥锁、原子写入与带栅栏后台队列**：`KeyedAsyncMutex` 按文件路径、索引目录与 Git 仓库加锁串行化读-改-写；`atomicWrite()` 使用 `${filePath}.tmp.${process.pid}.${crypto.randomUUID()}` 临时文件后 `fs.renameSync()` 原子替换并立即返回。向量索引更新与 Git 提交交由 `BackgroundSyncQueue` 在后台异步执行（自动合并同文件连续写入、彼此异常隔离），并在 `semanticSearch()` 与插件卸载 `cleanup` 前通过 `flush()` 栅栏等待收敛。
 2. **字符预算与单次原子腾挪**：全局/项目 `MEMORY.md` 默认 `6,000` 字符（另保留 `1,000` 行兜底），`USER.md` / `IDENTITY.md` 默认 `2,500` 字符（均可通过 `options.limits` 覆盖）；写入响应附带 `Budget: x/y chars (z%)` 提示，并支持 `replace_timestamps` 在单次锁内先删旧再追加。
 3. **Markdown 语义切片与增量向量化**：`chunkMarkdown()` 按 `##` / `###` 与 `<!-- timestamp | origin: ... -->` 切块，为超长段落（> `1,200` 字符）做 `150` 字符重叠切分，并在嵌入输入中注入 `[file > heading]` 上下文；`embedAndIndex()` 先经 `VectorStore.getExistingChunkHashes()` 比对 Hash，仅对新增/变更切片调用 `embedText()`。
 4. **Provenance 来源隔离**：写入支持 `origin: owner | agent | external`（缺省视为 `agent`）。`external` 禁止直接写入 curated 记忆文件；`getContextFiles()` 自动剔除带 `origin: external` 的块，阻断外部网页摘录回流进系统上下文。

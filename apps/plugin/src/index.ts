@@ -187,8 +187,9 @@ export function createMemoryPlugin(
         }
       })();
 
-      return () => {
+      return async () => {
         controller.abort();
+        await memoryManager.flush();
         sessionStates.clear();
         projects.clear();
         contextCache.clear();

@@ -36,24 +36,29 @@ mock.module("../src/search/embedding.js", () => ({
 }));
 
 const { VectorStore } = await import("../src/search/vector-store.js");
-let vectorStoreSpies: Array<{ mockRestore(): void }> = [];
+let vectorStoreSpies: Array<{
+  mockRestore(): void;
+  mockImplementation(fn: any): any;
+}> = [];
+
+const defaultUpsertImpl = async function (
+  this: InstanceType<typeof VectorStore>,
+  filePath: string,
+  chunks: any[],
+) {
+  const indexPath = this.resolveIndexPath(filePath);
+  const dirName = path.dirname(indexPath);
+  const projectsDir = (this as any).paths.projectsDir;
+  if (filePath.startsWith(projectsDir + path.sep)) {
+    projectStoreBasePaths.push(dirName);
+  }
+  upsertCalls.push({ filePath, chunks });
+};
 
 beforeAll(() => {
   vectorStoreSpies = [
     spyOn(VectorStore.prototype, "upsertFile").mockImplementation(
-      async function (
-        this: InstanceType<typeof VectorStore>,
-        filePath,
-        chunks,
-      ) {
-        const indexPath = this.resolveIndexPath(filePath);
-        const dirName = path.dirname(indexPath);
-        const projectsDir = (this as any).paths.projectsDir;
-        if (filePath.startsWith(projectsDir + path.sep)) {
-          projectStoreBasePaths.push(dirName);
-        }
-        upsertCalls.push({ filePath, chunks });
-      },
+      defaultUpsertImpl,
     ),
     spyOn(VectorStore.prototype, "searchGlobal").mockImplementation(
       async (_queryVector, topK = 20) => {
@@ -170,6 +175,7 @@ test("append write indexes the newly written daily content", async () => {
       },
       manager,
     );
+    await manager.flush();
 
     expect(upsertCalls).toHaveLength(1);
     expect(upsertCalls[0].filePath).toBe(
@@ -196,6 +202,7 @@ test("indexed chunks include the current embedding model", async () => {
       },
       manager,
     );
+    await manager.flush();
 
     expect(upsertCalls[0].chunks[0].metadata.embeddingModel).toBe("test-model");
     expect(upsertCalls[0].chunks[0].metadata.embeddingDtype).toBe("q8");
@@ -363,6 +370,7 @@ test("nested project memory indexes into the matching owner/repo project store",
       },
       manager,
     );
+    await manager.flush();
 
     expect(projectStoreBasePaths).toContain(
       path.join(memoryDir, "projects", "owner", "repo"),
@@ -390,6 +398,7 @@ test("memory writes default to the detected project when project is omitted", as
       },
       manager,
     );
+    await manager.flush();
 
     expect(upsertCalls[0].filePath).toBe(
       path.join(memoryDir, "projects", "owner", "repo", "MEMORY.md"),
@@ -408,12 +417,11 @@ test("memory tool writes default to the detected project when project is omitted
       content: "## Project\nplugin default project content",
     });
 
+    await harness.cleanup();
     expect(upsertCalls[0].filePath).toBe(
       path.join(memoryDir, "projects", "owner", "repo", "MEMORY.md"),
     );
     expect(fs.existsSync(path.join(memoryDir, "MEMORY.md"))).toBe(false);
-
-    await harness.cleanup();
   });
 });
 
@@ -428,14 +436,13 @@ test("memory tool writes to global memory when scope is global", async () => {
       content: "## Global\nplugin global memory content",
     });
 
+    await harness.cleanup();
     expect(upsertCalls[0].filePath).toBe(path.join(memoryDir, "MEMORY.md"));
     expect(
       fs.existsSync(
         path.join(memoryDir, "projects", "owner", "repo", "MEMORY.md"),
       ),
     ).toBe(false);
-
-    await harness.cleanup();
   });
 });
 
@@ -805,6 +812,7 @@ test("handleWrite returns [scope: project/...] when project is set", async () =>
     );
 
     expect(result).toStartWith("[scope: project/owner/repo] ");
+    await manager.flush();
   });
 });
 
@@ -822,6 +830,7 @@ test("handleWrite returns [scope: global] when project is not set", async () => 
     );
 
     expect(result).toStartWith("[scope: global] ");
+    await manager.flush();
   });
 });
 
@@ -840,6 +849,7 @@ test("handleWrite returns [scope: global] for daily without project", async () =
     );
 
     expect(result).toStartWith("[scope: global] ");
+    await manager.flush();
   });
 });
 
@@ -859,6 +869,7 @@ test("handleWrite returns [scope: project/...] for daily with project", async ()
     );
 
     expect(result).toStartWith("[scope: project/owner/repo] ");
+    await manager.flush();
   });
 });
 
@@ -943,6 +954,7 @@ test("handleEdit returns [scope: ...] prefix", async () => {
       manager,
     );
     expect(projResult).toStartWith("[scope: project/owner/repo] ");
+    await manager.flush();
   });
 });
 
@@ -967,6 +979,7 @@ test("handleDelete returns [scope: ...] prefix", async () => {
     );
 
     expect(result).toStartWith("[scope: global] ");
+    await manager.flush();
   });
 });
 
@@ -1072,6 +1085,7 @@ test("project daily write creates file in project daily directory", async () => 
       "2026-07-20.md",
     );
     expect(fs.existsSync(expectedPath)).toBe(true);
+    await manager.flush();
     expect(upsertCalls[0].filePath).toBe(expectedPath);
   });
 });
@@ -1090,6 +1104,7 @@ test("project daily indexes into project store", async () => {
       },
       manager,
     );
+    await manager.flush();
 
     // ProjectStore 的 basePath 应该是项目目录
     expect(projectStoreBasePaths).toContain(
@@ -1112,6 +1127,7 @@ test("global daily is unaffected by project daily changes", async () => {
       },
       manager,
     );
+    await manager.flush();
 
     const globalPath = path.join(memoryDir, "daily", "2026-07-20.md");
     expect(fs.existsSync(globalPath)).toBe(true);
@@ -1129,6 +1145,7 @@ test("global daily is unaffected by project daily changes", async () => {
       },
       manager,
     );
+    await manager.flush();
 
     const projectPath = path.join(
       memoryDir,
@@ -1359,6 +1376,7 @@ test("concurrent appendFile calls on the same file do not lose updates", async (
       .readdirSync(memoryDir)
       .filter((name) => name.includes(".tmp."));
     expect(leftovers).toHaveLength(0);
+    await manager.flush();
   });
 });
 
@@ -1386,6 +1404,7 @@ test("handleWrite reports Budget usage for budgeted files and omits it for daily
       manager,
     );
     expect(dailyRes).not.toContain("Budget:");
+    await manager.flush();
   });
 });
 
@@ -1417,6 +1436,7 @@ test("handleWrite warns when >= 85% budget and rejects over-budget with entry ti
       manager,
     );
     expect(nearRes).toContain("near limit");
+    await manager.flush();
   });
 });
 
@@ -1653,6 +1673,7 @@ test("handleList perceives project scope and supports global/project filtering",
       manager,
     );
     expect(periodOut).toContain("projects/owner/repo/daily/2026-11-21.md");
+    await manager.flush();
   });
 });
 
@@ -1711,6 +1732,7 @@ test("provenance blocks origin=external from curated memory and strips external 
     expect(fs.readFileSync(memoryFile, "utf-8")).toContain(
       "| origin: owner -->",
     );
+    await manager.flush();
   });
 });
 
@@ -1729,4 +1751,123 @@ test("checkLineLimit throws for local MEMORY.md over limit", async () => {
 test("checkLineLimit does not throw within limit", async () => {
   const { checkLineLimit } = await import("../src/utils/validation.js");
   expect(() => checkLineLimit("MEMORY.md", "a\nb\nc")).not.toThrow();
+});
+
+// =============================================================================
+// #37: 带栅栏的后台异步索引与 Git 队列测试
+// =============================================================================
+
+import { BackgroundSyncQueue } from "../src/utils/backgroundQueue.js";
+
+test("BackgroundSyncQueue coalesces rapid consecutive updates on the same file", async () => {
+  const executed: Array<{ filePath: string; operation: string }> = [];
+  let releaseFirst!: () => void;
+  const firstBlocked = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+
+  const queue = new BackgroundSyncQueue(async (filePath, operation) => {
+    executed.push({ filePath, operation });
+    if (executed.length === 1) {
+      await firstBlocked;
+    }
+  });
+
+  // 连续两次入队（首条尚未启动前即合并为 op-2）
+  queue.enqueue("/tmp/mem/MEMORY.md", "op-1");
+  queue.enqueue("/tmp/mem/MEMORY.md", "op-2");
+
+  // 等待 worker 进入 op-2 执行并阻塞在 firstBlocked
+  await new Promise((r) => setTimeout(r, 15));
+  expect(executed).toHaveLength(1);
+  expect(executed[0].operation).toBe("op-2");
+
+  // 执行期间再连推 op-3 与 op-4，应合并成最后一次 op-4
+  queue.enqueue("/tmp/mem/MEMORY.md", "op-3");
+  queue.enqueue("/tmp/mem/MEMORY.md", "op-4");
+  releaseFirst();
+
+  await queue.flush();
+  expect(executed).toHaveLength(2);
+  expect(executed[1].operation).toBe("op-4");
+  expect(queue.pendingCount()).toBe(0);
+});
+
+test("handleWrite returns without waiting for slow indexing and semanticSearch flushes before querying", async () => {
+  await withTempMemory(async (memoryDir) => {
+    const manager = new MemoryManager({ memoryDir });
+    await manager.ensureDirectories();
+
+    vectorStoreSpies[0].mockImplementation(async function (
+      this: InstanceType<typeof VectorStore>,
+      filePath: string,
+      chunks: any[],
+    ) {
+      await new Promise((r) => setTimeout(r, 120));
+      await defaultUpsertImpl.call(this, filePath, chunks);
+    });
+
+    try {
+      const startedAt = Date.now();
+      const writeRes = await handleWrite(
+        {
+          target: "memory",
+          content: "background queued token barrier-check-xyz",
+        },
+        manager,
+      );
+      const elapsedMs = Date.now() - startedAt;
+
+      // 落盘已立即完成，且写入响应未被 120ms 索引阻塞
+      expect(writeRes).toContain("Appended to MEMORY.md.");
+      expect(
+        fs.readFileSync(path.join(memoryDir, "MEMORY.md"), "utf-8"),
+      ).toContain("barrier-check-xyz");
+      expect(elapsedMs).toBeLessThan(100);
+      expect(upsertCalls).toHaveLength(0);
+
+      // 立即检索会等待 flush 栅栏，保证索引先完成再查
+      const searchRes = await manager.semanticSearch("barrier-check-xyz", 5);
+      expect(upsertCalls).toHaveLength(1);
+      expect(searchRes.length).toBeGreaterThanOrEqual(1);
+      expect(searchRes[0].text).toContain("barrier-check-xyz");
+    } finally {
+      vectorStoreSpies[0].mockImplementation(defaultUpsertImpl);
+      await manager.flush();
+    }
+  });
+});
+
+test("background indexing failure is logged and does not break flush or written Markdown", async () => {
+  await withTempMemory(async (memoryDir) => {
+    const manager = new MemoryManager({ memoryDir });
+    await manager.ensureDirectories();
+
+    const errors: string[] = [];
+    const origError = console.error;
+    console.error = (...args: unknown[]) =>
+      errors.push(args.map(String).join(" "));
+
+    vectorStoreSpies[0].mockImplementation(async () => {
+      throw new Error("simulated index disk failure");
+    });
+
+    try {
+      await handleWrite(
+        { target: "memory", content: "durable markdown survives index error" },
+        manager,
+      );
+      await expect(manager.flush()).resolves.toBeUndefined();
+
+      expect(
+        fs.readFileSync(path.join(memoryDir, "MEMORY.md"), "utf-8"),
+      ).toContain("durable markdown survives index error");
+      expect(
+        errors.some((msg) => msg.includes("Background vector indexing failed")),
+      ).toBe(true);
+    } finally {
+      console.error = origError;
+      vectorStoreSpies[0].mockImplementation(defaultUpsertImpl);
+    }
+  });
 });
