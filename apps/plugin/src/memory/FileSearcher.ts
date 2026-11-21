@@ -7,7 +7,7 @@ import type {
   MonthGroup,
   SearchScope,
 } from "../types.js";
-import type { IFileStorageProvider } from "../providers/types.js";
+import { readFileSafe } from "../utils/fs.js";
 import { embedText } from "../search/embedding.js";
 import {
   extractTimestamps,
@@ -20,7 +20,6 @@ export class FileSearcher {
   constructor(
     private memoryDir: string,
     private dailyDir: string,
-    private fileStorage: IFileStorageProvider,
     private getProjectStore: (projectId: string) => ProjectStore,
   ) {}
 
@@ -48,7 +47,7 @@ export class FileSearcher {
         for (const file of files) {
           if (results.length >= maxResults) break;
           const filePath = path.join(dir, file);
-          const content = await this.fileStorage.readFile(filePath);
+          const content = readFileSafe(filePath);
           if (!content) continue;
           const lines = content.split("\n");
           for (
@@ -109,7 +108,7 @@ export class FileSearcher {
 
     const resultsWithTimestamp: SemanticSearchResult[] = [];
     for (const result of results) {
-      const fileContent = await this.fileStorage.readFile(result.filePath);
+      const fileContent = readFileSafe(result.filePath);
       let timestamp = result.timestamp;
 
       // 若索引中无时间戳，尝试从文件内容中推断
@@ -152,8 +151,8 @@ export class FileSearcher {
   }
 
   /** 读取文件并提取时间戳列表 */
-  private async getTimestamps(dir: string, file: string): Promise<string[]> {
-    const content = await this.fileStorage.readFile(path.join(dir, file));
+  private getTimestamps(dir: string, file: string): string[] {
+    const content = readFileSafe(path.join(dir, file));
     return content ? extractTimestamps(content) : [];
   }
 
@@ -184,59 +183,20 @@ export class FileSearcher {
     return { root, daily };
   }
 
-  /**
-   * 列出文件及其关联的时间戳列表
-   * daily 文件数超过 limit 时汇总为 "+N more" 条目
-   */
-  async listFilesWithTimestamps(
-    limit: number = 7,
-  ): Promise<Array<{ name: string; timestamps: string[] }>> {
-    const result: Array<{ name: string; timestamps: string[] }> = [];
-    const { root, daily } = this.listFiles();
-
-    for (const file of root) {
-      const timestamps = await this.getTimestamps(this.memoryDir, file);
-      result.push({ name: file, timestamps });
-    }
-
-    const recentDaily = daily.slice(0, limit);
-    const moreCount = daily.length - limit;
-
-    for (const file of recentDaily) {
-      const timestamps = await this.getTimestamps(this.dailyDir, file);
-      result.push({ name: `daily/${file}`, timestamps });
-    }
-
-    if (moreCount > 0) {
-      result.push({
-        name: `... and ${moreCount} more daily logs`,
-        timestamps: [],
-      });
-    }
-
-    return result;
-  }
-
   /** 获取所有文件：读取本地目录并解析时间戳 */
-  private async getAllFiles(): Promise<{
+  private getAllFiles(): {
     root: Array<{ name: string; timestamps: string[] }>;
     daily: Array<{ name: string; timestamps: string[] }>;
-  }> {
+  } {
     const { root, daily } = this.listFiles();
-    const rootFiles: Array<{ name: string; timestamps: string[] }> = [];
-    for (const file of root) {
-      rootFiles.push({
-        name: file,
-        timestamps: await this.getTimestamps(this.memoryDir, file),
-      });
-    }
-    const dailyFiles: Array<{ name: string; timestamps: string[] }> = [];
-    for (const file of daily) {
-      dailyFiles.push({
-        name: `daily/${file}`,
-        timestamps: await this.getTimestamps(this.dailyDir, file),
-      });
-    }
+    const rootFiles = root.map((file) => ({
+      name: file,
+      timestamps: this.getTimestamps(this.memoryDir, file),
+    }));
+    const dailyFiles = daily.map((file) => ({
+      name: `daily/${file}`,
+      timestamps: this.getTimestamps(this.dailyDir, file),
+    }));
     return { root: rootFiles, daily: dailyFiles };
   }
 
@@ -277,7 +237,7 @@ export class FileSearcher {
     root: Array<{ name: string; timestamps: string[] }>;
     monthly: MonthGroup[];
   }> {
-    const { root, daily } = await this.getAllFiles();
+    const { root, daily } = this.getAllFiles();
     return { root, monthly: this.groupDailyByMonth(daily) };
   }
 
@@ -288,7 +248,7 @@ export class FileSearcher {
   async listFilesByPeriod(
     period: string,
   ): Promise<Array<{ name: string; timestamps: string[] }>> {
-    const { daily } = await this.getAllFiles();
+    const { daily } = this.getAllFiles();
     return daily.filter((file) => {
       const dateStr = file.name.replace(/^daily\//, "").replace(/\.md$/, "");
       if (period.length !== 4 && period.length !== 7) return false;

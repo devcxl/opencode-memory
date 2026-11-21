@@ -13,36 +13,11 @@ export const MemoryToolInput = z.object({
   target: z
     .enum(["memory", "identity", "user", "daily"])
     .optional()
-    .describe(
-      "Target file: memory, identity, user, or daily (backward compatible)",
-    ),
-  category: z
-    .enum(["instruction", "learning", "daily"])
-    .optional()
-    .describe(
-      "Memory category: instruction (rules/workflows), learning (knowledge/preferences), daily (logs)",
-    ),
-  sub_type: z
-    .enum([
-      "identity",
-      "rule",
-      "workflow",
-      "preference",
-      "episodic",
-      "knowledge",
-    ])
-    .optional()
-    .describe(
-      "Sub-type for instruction (identity/rule/workflow) or learning (preference/episodic/knowledge)",
-    ),
+    .describe("Target file: memory, identity, user, or daily"),
   title: z
     .string()
     .optional()
-    .describe("Title for instruction or learning (for structured memory)"),
-  path_pattern: z
-    .string()
-    .optional()
-    .describe("Glob pattern for path-scoped rule loading (e.g. 'src/api/**')"),
+    .describe("Optional heading title prepended when writing"),
   content: z
     .string()
     .optional()

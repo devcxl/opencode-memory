@@ -1,12 +1,10 @@
 import type { Plugin } from "@opencode/plugin";
-import type { MemoryManager } from "../memory/MemoryManager.js";
 import type { BootstrapManager } from "../memory/BootstrapManager.js";
 import { MEMORY_INIT_PROMPT } from "../instructions/memoryInstructions.js";
 
 type PluginContext = Plugin.Context;
 
 export interface MemoryInitCommandDependencies {
-  memoryManager: MemoryManager;
   bootstrapManager: BootstrapManager;
 }
 
@@ -27,7 +25,7 @@ export async function registerMemoryInitCommand(
       description: "Initialize OpenCode memory system (first-time setup)",
       async execute({ sessionID, prompt, delivery }) {
         // 已初始化：命令保持注册但不再执行引导
-        if (deps.memoryManager.getInitState() === "ready") return;
+        if (deps.bootstrapManager.getInitState() === "ready") return;
 
         await deps.bootstrapManager.createInitTemplates();
 

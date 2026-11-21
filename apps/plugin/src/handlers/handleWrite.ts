@@ -18,24 +18,11 @@ export async function handleWrite(
     mode?: string;
     date?: string;
     project?: string;
-    category?: string;
-    sub_type?: string;
     title?: string;
-    path_pattern?: string;
   },
   memoryManager: MemoryManager,
 ): Promise<string> {
-  const {
-    target,
-    content,
-    mode,
-    date,
-    project,
-    category,
-    sub_type,
-    title,
-    path_pattern,
-  } = params;
+  const { target, content, mode, date, project, title } = params;
 
   if (!content) {
     return "Error: content is required for write action.";
@@ -57,8 +44,6 @@ export async function handleWrite(
       target,
       date,
       project || undefined,
-      category,
-      sub_type,
     );
 
     const effectiveContent = title ? `## ${title}\n${content}` : content;

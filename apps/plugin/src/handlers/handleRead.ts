@@ -7,12 +7,10 @@ export async function handleRead(
     target?: string;
     date?: string;
     project?: string;
-    category?: string;
-    sub_type?: string;
   },
   memoryManager: MemoryManager,
 ): Promise<string> {
-  const { target, date, project, category, sub_type } = params;
+  const { target, date, project } = params;
 
   if (!target) {
     return handleList({}, memoryManager);
@@ -23,8 +21,6 @@ export async function handleRead(
       target,
       date,
       project || undefined,
-      category,
-      sub_type,
     );
     const scopeTag = project
       ? `[scope: project/${project}]`

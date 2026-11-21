@@ -81,10 +81,7 @@ export function createMemoryPlugin(
           : getMemoryAwarenessInstructions();
 
       // 1. 命令：/memory-init
-      await registerMemoryInitCommand(ctx, {
-        memoryManager,
-        bootstrapManager,
-      });
+      await registerMemoryInitCommand(ctx, { bootstrapManager });
 
       // 2. 工具：memory
       await registerMemoryTool(ctx, { memoryManager, projects });

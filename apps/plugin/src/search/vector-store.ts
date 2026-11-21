@@ -356,15 +356,4 @@ export class ProjectStore {
     const items = await index.queryItems(queryVector, "", limit);
     return filterCurrentSearchResults(items as QuerySearchItem[]);
   }
-
-  /** 检查项目索引中是否存在已索引的数据 */
-  async checkExists(): Promise<boolean> {
-    try {
-      const index = await this.getIndex();
-      const items = await index.listItems();
-      return items.length > 0;
-    } catch {
-      return false;
-    }
-  }
 }

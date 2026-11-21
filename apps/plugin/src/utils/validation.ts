@@ -46,14 +46,6 @@ export function validateTimestamp(timestamp: string): void {
   }
 }
 
-/** 校验必填的时间戳或日期参数不为空 */
-export function validateTimestampOrDate(value: string): void {
-  if (!value) {
-    throw new Error("Timestamp or date is required");
-  }
-  validateTimestamp(value);
-}
-
 /** 将 daily 的 date 参数规范为 YYYY-MM-DD；空值表示未指定 */
 export function normalizeDailyDate(date?: string): string | undefined {
   if (date === undefined) return undefined;

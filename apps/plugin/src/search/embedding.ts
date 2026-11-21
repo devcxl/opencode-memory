@@ -147,11 +147,6 @@ export async function embedText(text: string): Promise<number[]> {
   return Array.from(output.data) as number[];
 }
 
-/** 检查 embedder 是否已完成初始化 */
-export async function isInitialized(): Promise<boolean> {
-  return embedder !== null;
-}
-
 /** 获取当前模型的向量维度 */
 export function getEmbeddingDimensions(): number {
   return MODEL.dimensions;

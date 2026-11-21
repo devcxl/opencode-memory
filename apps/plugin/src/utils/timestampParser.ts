@@ -53,14 +53,3 @@ export function extractTimestamps(content: string): string[] {
 
   return timestamps;
 }
-
-/**
- * 将日期格式补全为完整时间戳用于显示/排序。
- * "2024-01-01" → "2024-01-01 00:00:00"，已有时间的原样返回。
- */
-export function formatTimestampForDisplay(timestamp: string): string {
-  if (timestamp.includes(" ")) {
-    return timestamp;
-  }
-  return `${timestamp} 00:00:00`;
-}

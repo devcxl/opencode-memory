@@ -24,7 +24,6 @@ mock.module("../src/search/embedding.js", () => ({
   getCurrentModelId: () => currentModelId,
   getEmbeddingDimensions: () => 384,
   initEmbedder: async () => {},
-  isInitialized: async () => true,
 }));
 
 mock.module("../src/search/vector-store.js", () => ({
@@ -70,10 +69,6 @@ mock.module("../src/search/vector-store.js", () => ({
 
     async search() {
       return projectSemanticResults;
-    }
-
-    async checkExists() {
-      return semanticResults.length > 0;
     }
   },
 }));
@@ -482,21 +477,6 @@ test("resolveProjectId handles scope correctly", () => {
   expect(resolveProjectId("project", "../repo")).toBeNull();
 });
 
-// 创建 mock IFileStorageProvider，适配 FileSearcher 的新接口
-function makeMockFileStorage(): {
-  readFile: (filePath: string) => Promise<string | null>;
-} {
-  return {
-    readFile: async (filePath: string) => {
-      try {
-        return fs.readFileSync(filePath, "utf-8");
-      } catch {
-        return null;
-      }
-    },
-  };
-}
-
 test("semantic search with project scope only returns project results", async () => {
   const { homeDir, memoryDir } = makeTempHome();
   const dailyDir = path.join(memoryDir, "daily");
@@ -531,11 +511,9 @@ test("semantic search with project scope only returns project results", async ()
       },
     ];
 
-    const fileStorage = makeMockFileStorage();
     const searcher = new FileSearcher(
       memoryDir,
       dailyDir,
-      fileStorage as any,
       () =>
         ({
           search: async () => projectSemanticResults,
@@ -575,15 +553,9 @@ test("semantic search with project scope falls back to global without project id
       },
     ];
 
-    const fileStorage = makeMockFileStorage();
-    const searcher = new FileSearcher(
-      memoryDir,
-      dailyDir,
-      fileStorage as any,
-      () => {
-        throw new Error("project store should not be used");
-      },
-    );
+    const searcher = new FileSearcher(memoryDir, dailyDir, () => {
+      throw new Error("project store should not be used");
+    });
 
     const results = await searcher.semanticSearch(
       "searchable",
@@ -629,15 +601,9 @@ test("semantic search filters by the matched chunk timestamp", async () => {
       },
     ];
 
-    const fileStorage2 = makeMockFileStorage();
-    const searcher = new FileSearcher(
-      memoryDir,
-      dailyDir,
-      fileStorage2 as any,
-      () => {
-        throw new Error("project store should not be used");
-      },
-    );
+    const searcher = new FileSearcher(memoryDir, dailyDir, () => {
+      throw new Error("project store should not be used");
+    });
 
     const results = await searcher.semanticSearch(
       "new searchable content",
@@ -679,15 +645,9 @@ test("semantic search filters after enough results are retrieved for period", as
       },
     ];
 
-    const fileStorage3 = makeMockFileStorage();
-    const searcher = new FileSearcher(
-      memoryDir,
-      dailyDir,
-      fileStorage3 as any,
-      () => {
-        throw new Error("project store should not be used");
-      },
-    );
+    const searcher = new FileSearcher(memoryDir, dailyDir, () => {
+      throw new Error("project store should not be used");
+    });
 
     const results = await searcher.semanticSearch(
       "target",
@@ -731,15 +691,9 @@ test("semantic search does not fallback to the first timestamp when multiple ent
       },
     ];
 
-    const fileStorage4 = makeMockFileStorage();
-    const searcher = new FileSearcher(
-      memoryDir,
-      dailyDir,
-      fileStorage4 as any,
-      () => {
-        throw new Error("project store should not be used");
-      },
-    );
+    const searcher = new FileSearcher(memoryDir, dailyDir, () => {
+      throw new Error("project store should not be used");
+    });
 
     const results = await searcher.semanticSearch(
       "unmatched",
@@ -782,15 +736,9 @@ test("semantic search does not bind a cross-entry legacy chunk to the first time
       },
     ];
 
-    const fileStorage5 = makeMockFileStorage();
-    const searcher = new FileSearcher(
-      memoryDir,
-      dailyDir,
-      fileStorage5 as any,
-      () => {
-        throw new Error("project store should not be used");
-      },
-    );
+    const searcher = new FileSearcher(memoryDir, dailyDir, () => {
+      throw new Error("project store should not be used");
+    });
 
     const results = await searcher.semanticSearch(
       "searchable",

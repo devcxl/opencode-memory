@@ -1,17 +1,52 @@
+import * as fs from "node:fs";
 import { MemoryManager } from "./MemoryManager.js";
 import {
   BOOTSTRAP_TEMPLATE,
   IDENTITY_TEMPLATE,
   MEMORY_TEMPLATE,
   USER_TEMPLATE,
+  isInitTemplateContent,
 } from "./templates.js";
+import { readFileSafe } from "../utils/fs.js";
 
-/** 管理首次运行的引导流程，负责创建模板文件和检查引导状态 */
+/** 管理首次运行的引导流程，负责初始化状态判断和模板创建 */
 export class BootstrapManager {
-  private memoryManager: MemoryManager;
+  constructor(private readonly memoryManager: MemoryManager) {}
 
-  constructor(memoryManager: MemoryManager) {
-    this.memoryManager = memoryManager;
+  /** 判断是否处于首次引导流程中（BOOTSTRAP.md 存在） */
+  isBootstrapNeeded(): boolean {
+    return fs.existsSync(this.memoryManager.getBootstrapPath());
+  }
+
+  /**
+   * 推断当前初始化状态：
+   * - BOOTSTRAP.md 存在 → "bootstrapping"
+   * - MEMORY / IDENTITY / USER 均存在且包含非模板内容 → "ready"
+   * - 其余情况 → "uninitialized"
+   */
+  getInitState(): "uninitialized" | "bootstrapping" | "ready" {
+    if (this.isBootstrapNeeded()) {
+      return "bootstrapping";
+    }
+
+    const memoryContent = readFileSafe(this.memoryManager.getMemoryPath());
+    if (!memoryContent?.trim() || isInitTemplateContent(memoryContent)) {
+      return "uninitialized";
+    }
+
+    const identityContent = readFileSafe(this.memoryManager.getIdentityPath());
+    const userContent = readFileSafe(this.memoryManager.getUserPath());
+
+    if (
+      identityContent?.trim() &&
+      userContent?.trim() &&
+      !isInitTemplateContent(identityContent) &&
+      !isInitTemplateContent(userContent)
+    ) {
+      return "ready";
+    }
+
+    return "uninitialized";
   }
 
   /**
@@ -26,25 +61,21 @@ export class BootstrapManager {
     const identityPath = this.memoryManager.getIdentityPath();
     const userPath = this.memoryManager.getUserPath();
 
-    if (!this.memoryManager.fileExists(bootstrapPath)) {
-      this.memoryManager.writeFileSync(
+    if (!fs.existsSync(bootstrapPath)) {
+      fs.writeFileSync(
         bootstrapPath,
         BOOTSTRAP_TEMPLATE(bootstrapPath),
+        "utf-8",
       );
     }
-    if (!this.memoryManager.fileExists(memoryPath)) {
-      this.memoryManager.writeFileSync(memoryPath, MEMORY_TEMPLATE);
+    if (!fs.existsSync(memoryPath)) {
+      fs.writeFileSync(memoryPath, MEMORY_TEMPLATE, "utf-8");
     }
-    if (!this.memoryManager.fileExists(identityPath)) {
-      this.memoryManager.writeFileSync(identityPath, IDENTITY_TEMPLATE);
+    if (!fs.existsSync(identityPath)) {
+      fs.writeFileSync(identityPath, IDENTITY_TEMPLATE, "utf-8");
     }
-    if (!this.memoryManager.fileExists(userPath)) {
-      this.memoryManager.writeFileSync(userPath, USER_TEMPLATE);
+    if (!fs.existsSync(userPath)) {
+      fs.writeFileSync(userPath, USER_TEMPLATE, "utf-8");
     }
-  }
-
-  /** 委托给 MemoryManager：判断是否需要首次引导 */
-  isBootstrapNeeded(): boolean {
-    return this.memoryManager.needsBootstrap();
   }
 }
