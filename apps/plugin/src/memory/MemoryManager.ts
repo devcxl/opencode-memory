@@ -18,17 +18,11 @@ import {
   checkCharBudget,
   checkLineLimit,
   formatBudgetNote,
-  normalizeDailyDate,
   validateProjectId,
   validateTimestamp,
 } from "../utils/validation.js";
 import { gitCommit } from "../utils/git.js";
-import {
-  embedText,
-  getCurrentDtype,
-  getCurrentModelId,
-} from "../search/embedding.js";
-import { chunkMarkdown } from "../search/chunker.js";
+import { indexFileIncrementally } from "../search/incrementalIndexer.js";
 import { VectorStore } from "../search/vector-store.js";
 import {
   formatTimestampComment,
@@ -149,45 +143,9 @@ export class MemoryManager {
     filePath: string;
     displayName: string;
   } {
-    switch (target) {
-      case "memory": {
-        if (project) {
-          return {
-            filePath: this.getProjectMemoryPath(project),
-            displayName: `projects/${project}/MEMORY.md`,
-          };
-        }
-        return {
-          filePath: this.getMemoryPath(),
-          displayName: "MEMORY.md",
-        };
-      }
-      case "identity":
-        return {
-          filePath: this.getIdentityPath(),
-          displayName: "IDENTITY.md",
-        };
-      case "user":
-        return {
-          filePath: this.getUserPath(),
-          displayName: "USER.md",
-        };
-      case "daily": {
-        const targetDate = normalizeDailyDate(date) ?? this.todayStr();
-        if (project) {
-          return {
-            filePath: this.paths.projectDailyPath(project, targetDate),
-            displayName: `projects/${project}/daily/${targetDate}.md`,
-          };
-        }
-        return {
-          filePath: this.getDailyPath(targetDate),
-          displayName: `daily/${targetDate}.md`,
-        };
-      }
-      default:
-        throw new Error(`Unknown target: ${target}`);
-    }
+    return this.paths.resolveTargetPath(target, date, project, () =>
+      this.todayStr(),
+    );
   }
 
   /** 返回今天的日期字符串 YYYY-MM-DD */
@@ -408,52 +366,7 @@ export class MemoryManager {
     filePath: string,
     content: string,
   ): Promise<void> {
-    try {
-      const chunks = chunkMarkdown(content, filePath);
-      const embeddingModel = getCurrentModelId();
-      const embeddingDtype = getCurrentDtype();
-
-      const existingHashes =
-        await this.vectorStore.getExistingChunkHashes(filePath);
-      const chunkHashSet = new Set(chunks.map((c) => c.hash));
-      const preservedHashes = new Set<string>();
-      for (const hash of existingHashes) {
-        if (chunkHashSet.has(hash)) {
-          preservedHashes.add(hash);
-        }
-      }
-
-      const chunksToEmbed = chunks.filter((c) => !preservedHashes.has(c.hash));
-      const vectors = await Promise.all(
-        chunksToEmbed.map((c) => embedText(c.embeddingText ?? c.text)),
-      );
-      const embedded = chunksToEmbed.map((chunk, idx) => ({
-        vector: vectors[idx],
-        metadata: {
-          filePath,
-          heading: chunk.heading,
-          text: chunk.text,
-          hash: chunk.hash,
-          embeddingModel,
-          embeddingDtype,
-          ...(chunk.timestamp ? { timestamp: chunk.timestamp } : {}),
-        },
-      }));
-
-      if (embedded.length > 0 || preservedHashes.size !== existingHashes.size) {
-        await this.vectorStore.upsertFile(
-          filePath,
-          embedded,
-          preservedHashes.size > 0 ? preservedHashes : undefined,
-        );
-      }
-    } catch (err) {
-      const errMsg = (err as Error).message;
-      // embedding 引擎未初始化时静默跳过，不阻塞写入操作
-      if (!errMsg.includes("not initialized")) {
-        throw err;
-      }
-    }
+    await indexFileIncrementally(filePath, content, this.vectorStore);
   }
 
   /**

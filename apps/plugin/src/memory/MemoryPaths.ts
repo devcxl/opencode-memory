@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import { normalizeDailyDate, validateProjectId } from "../utils/validation.js";
 
 /**
  * 从 memoryDir 派生所有 memory 相关目录与文件路径。
@@ -56,5 +57,45 @@ export class MemoryPaths {
 
   get dailyIndexPath(): string {
     return path.join(this.memoryDir, "daily.index");
+  }
+
+  /** 根据 target 类型解析目标文件路径与展示名 */
+  resolveTargetPath(
+    target: string,
+    date: string | undefined,
+    project: string | null | undefined,
+    todayStr: () => string,
+  ): { filePath: string; displayName: string } {
+    switch (target) {
+      case "memory":
+        if (project) {
+          validateProjectId(project);
+          return {
+            filePath: this.projectMemoryPath(project),
+            displayName: `projects/${project}/MEMORY.md`,
+          };
+        }
+        return { filePath: this.memoryPath, displayName: "MEMORY.md" };
+      case "identity":
+        return { filePath: this.identityPath, displayName: "IDENTITY.md" };
+      case "user":
+        return { filePath: this.userPath, displayName: "USER.md" };
+      case "daily": {
+        const targetDate = normalizeDailyDate(date) ?? todayStr();
+        if (project) {
+          validateProjectId(project);
+          return {
+            filePath: this.projectDailyPath(project, targetDate),
+            displayName: `projects/${project}/daily/${targetDate}.md`,
+          };
+        }
+        return {
+          filePath: this.dailyPath(targetDate),
+          displayName: `daily/${targetDate}.md`,
+        };
+      }
+      default:
+        throw new Error(`Unknown target: ${target}`);
+    }
   }
 }

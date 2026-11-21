@@ -4,7 +4,6 @@ import type {
   SearchResult,
   ListResult,
   SemanticSearchResult,
-  MonthGroup,
   SearchScope,
 } from "../types.js";
 import { readFileSafe } from "../utils/fs.js";
@@ -20,6 +19,11 @@ import {
   parseContentByTimestamp,
 } from "../utils/timestampParser.js";
 import type { SearchResult as VectorSearchResult } from "../search/vector-store.js";
+import {
+  FileLister,
+  type FileTimestampSummary,
+  type GroupedMemoryFiles,
+} from "./FileLister.js";
 
 const HYBRID_VECTOR_WEIGHT = 0.7;
 const HYBRID_LEXICAL_WEIGHT = 0.3;
@@ -49,6 +53,7 @@ interface CorpusChunkDoc {
 /** 封装对 memory 文件的搜索和列举逻辑，支持关键词搜索、混合语义搜索与作用域列表分组 */
 export class FileSearcher {
   private readonly projectsDir: string;
+  private readonly lister: FileLister;
 
   constructor(
     private memoryDir: string,
@@ -56,6 +61,7 @@ export class FileSearcher {
     private vectorStore: VectorSearchBackend,
   ) {
     this.projectsDir = path.join(this.memoryDir, "projects");
+    this.lister = new FileLister(this.memoryDir, this.dailyDir);
   }
 
   /**
@@ -319,182 +325,28 @@ export class FileSearcher {
     return timestamps.length === 1 ? timestamps[0] : undefined;
   }
 
-  /** 读取文件并提取时间戳列表 */
-  private getTimestamps(dir: string, file: string): string[] {
-    const content = readFileSafe(path.join(dir, file));
-    return content ? extractTimestamps(content) : [];
-  }
-
   /** 列出指定根目录和 daily 目录下的所有 md 文件，daily 按倒序排列 */
   listFiles(
     rootDir: string = this.memoryDir,
     dailySubDir: string = this.dailyDir,
   ): ListResult {
-    const root: string[] = [];
-    const daily: string[] = [];
-
-    try {
-      const rootFiles = fs
-        .readdirSync(rootDir)
-        .filter((f) => f.endsWith(".md"))
-        .sort();
-      for (const f of rootFiles) {
-        if (f !== "BOOTSTRAP.md") root.push(f);
-      }
-    } catch {}
-
-    try {
-      const dailyFiles = fs
-        .readdirSync(dailySubDir)
-        .filter((f) => f.endsWith(".md"))
-        .sort()
-        .reverse();
-      daily.push(...dailyFiles);
-    } catch {}
-
-    return { root, daily };
+    return this.lister.listFiles(rootDir, dailySubDir);
   }
 
-  /** 获取指定目录所有文件及时间戳 */
-  private getAllFiles(
-    rootDir: string = this.memoryDir,
-    dailySubDir: string = this.dailyDir,
-    prefix: string = "",
-  ): {
-    root: Array<{ name: string; timestamps: string[] }>;
-    daily: Array<{ name: string; timestamps: string[] }>;
-  } {
-    const { root, daily } = this.listFiles(rootDir, dailySubDir);
-    const rootFiles = root.map((file) => ({
-      name: prefix ? `${prefix}/${file}` : file,
-      timestamps: this.getTimestamps(rootDir, file),
-    }));
-    const dailyFiles = daily.map((file) => ({
-      name: prefix ? `${prefix}/daily/${file}` : `daily/${file}`,
-      timestamps: this.getTimestamps(dailySubDir, file),
-    }));
-    return { root: rootFiles, daily: dailyFiles };
-  }
-
-  /** 按月份聚合 daily 文件，按月份倒序 */
-  private groupDailyByMonth(
-    daily: Array<{ name: string; timestamps: string[] }>,
-  ): MonthGroup[] {
-    const monthlyMap = new Map<
-      string,
-      Array<{ name: string; timestamps: string[] }>
-    >();
-    for (const file of daily) {
-      const base = path.basename(file.name);
-      const dateStr = base.replace(/\.md$/, "");
-      const month = dateStr.slice(0, 7);
-      if (!monthlyMap.has(month)) monthlyMap.set(month, []);
-      monthlyMap.get(month)!.push(file);
-    }
-
-    const monthly: MonthGroup[] = [];
-    for (const [month, files] of monthlyMap.entries()) {
-      const entryCount = files.reduce((sum, f) => sum + f.timestamps.length, 0);
-      monthly.push({
-        month,
-        fileCount: files.length,
-        entryCount,
-        files,
-      });
-    }
-    monthly.sort((a, b) => b.month.localeCompare(a.month));
-    return monthly;
-  }
-
-  /**
-   * 按月份分组列出文件，支持项目作用域（all / global / project）。
-   */
+  /** 按月份分组列出文件，支持项目作用域（all / global / project） */
   async listFilesGroupedByMonth(
     projectId?: string | null,
     scope: SearchScope = "all",
-  ): Promise<{
-    root: Array<{ name: string; timestamps: string[] }>;
-    monthly: MonthGroup[];
-    project?: {
-      projectId: string;
-      root: Array<{ name: string; timestamps: string[] }>;
-      monthly: MonthGroup[];
-    };
-  }> {
-    const includeGlobal = scope !== "project" || !projectId;
-    const includeProject = Boolean(projectId && scope !== "global");
-
-    const globalData = includeGlobal
-      ? this.getAllFiles(this.memoryDir, this.dailyDir)
-      : { root: [], daily: [] };
-
-    let projectData:
-      | {
-          projectId: string;
-          root: Array<{ name: string; timestamps: string[] }>;
-          monthly: MonthGroup[];
-        }
-      | undefined;
-
-    if (includeProject && projectId) {
-      const projDir = path.join(this.projectsDir, ...projectId.split("/"));
-      const projAll = this.getAllFiles(
-        projDir,
-        path.join(projDir, "daily"),
-        `projects/${projectId}`,
-      );
-      projectData = {
-        projectId,
-        root: projAll.root,
-        monthly: this.groupDailyByMonth(projAll.daily),
-      };
-    }
-
-    return {
-      root: globalData.root,
-      monthly: this.groupDailyByMonth(globalData.daily),
-      ...(projectData ? { project: projectData } : {}),
-    };
+  ): Promise<GroupedMemoryFiles> {
+    return this.lister.listFilesGroupedByMonth(projectId, scope);
   }
 
-  /**
-   * 按时间段筛选 daily 文件，支持项目作用域。
-   * period 为 "YYYY-MM" 或 "YYYY" 格式，匹配文件名前缀。
-   */
+  /** 按时间段筛选 daily 文件，支持项目作用域 */
   async listFilesByPeriod(
     period: string,
     projectId?: string | null,
     scope: SearchScope = "all",
-  ): Promise<Array<{ name: string; timestamps: string[] }>> {
-    if (period.length !== 4 && period.length !== 7) return [];
-
-    const includeGlobal = scope !== "project" || !projectId;
-    const includeProject = Boolean(projectId && scope !== "global");
-    const results: Array<{ name: string; timestamps: string[] }> = [];
-
-    if (includeProject && projectId) {
-      const projDir = path.join(this.projectsDir, ...projectId.split("/"));
-      const { daily } = this.getAllFiles(
-        projDir,
-        path.join(projDir, "daily"),
-        `projects/${projectId}`,
-      );
-      results.push(
-        ...daily.filter((f) =>
-          path.basename(f.name).replace(/\.md$/, "").startsWith(period),
-        ),
-      );
-    }
-
-    if (includeGlobal) {
-      const { daily } = this.getAllFiles(this.memoryDir, this.dailyDir);
-      results.push(
-        ...daily.filter((f) =>
-          path.basename(f.name).replace(/\.md$/, "").startsWith(period),
-        ),
-      );
-    }
-
-    return results;
+  ): Promise<FileTimestampSummary[]> {
+    return this.lister.listFilesByPeriod(period, projectId, scope);
   }
 }
