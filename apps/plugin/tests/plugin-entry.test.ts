@@ -52,6 +52,103 @@ test("context hook injects memory context as a text system part", async () => {
   });
 });
 
+test("context hook splits static instructions, frozen memory context, and dynamic reminder into ordered SystemParts", async () => {
+  await withTempHome(async (memoryDir) => {
+    fs.mkdirSync(memoryDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(memoryDir, "MEMORY.md"),
+      "ordered part content",
+      "utf-8",
+    );
+
+    const harness = await createV2Harness(MemoryPlugin, { options: {} });
+    const partsBefore = await harness.buildSystemParts("s1");
+    expect(partsBefore).toHaveLength(2);
+    expect(partsBefore[0].text).not.toContain("ordered part content");
+    expect(partsBefore[1].text).toContain("# Memory Context");
+    expect(partsBefore[1].text).toContain("ordered part content");
+
+    await harness.triggerToolAfter(
+      "memory",
+      { action: "write", target: "memory" },
+      "s1",
+    );
+    const partsAfter = await harness.buildSystemParts("s1");
+    expect(partsAfter).toHaveLength(3);
+    expect(partsAfter[0].text).toBe(partsBefore[0].text);
+    expect(partsAfter[2].text).toContain("Memory Reminder");
+
+    await harness.cleanup();
+  });
+});
+
+test("session context snapshot stays frozen across external disk edits until memory write or compaction", async () => {
+  await withTempHome(async (memoryDir) => {
+    fs.mkdirSync(memoryDir, { recursive: true });
+    const memoryFile = path.join(memoryDir, "MEMORY.md");
+    fs.writeFileSync(memoryFile, "initial snapshot", "utf-8");
+
+    const harness = await createV2Harness(MemoryPlugin, { options: {} });
+    const first = await harness.buildSystemParts("s-freeze");
+    expect(first[1].text).toContain("initial snapshot");
+
+    // 外部修改磁盘内容，在未失效前同会话前缀保持冻结不变
+    fs.writeFileSync(memoryFile, "updated on disk", "utf-8");
+    const second = await harness.buildSystemParts("s-freeze");
+    expect(second[1].text).toBe(first[1].text);
+    expect(second[1].text).not.toContain("updated on disk");
+
+    // 写 daily 不失效注入快照
+    await harness.triggerToolAfter(
+      "memory",
+      { action: "write", target: "daily" },
+      "s-freeze",
+    );
+    const afterDaily = await harness.buildSystemParts("s-freeze");
+    expect(afterDaily[1].text).toBe(first[1].text);
+
+    // 写 memory 使当前会话快照失效，立即读取最新内容
+    await harness.triggerToolAfter(
+      "memory",
+      { action: "write", target: "memory" },
+      "s-freeze",
+    );
+    const afterMemoryWrite = await harness.buildSystemParts("s-freeze");
+    expect(afterMemoryWrite[1].text).toContain("updated on disk");
+
+    // 再次外部修改后触发 compaction，快照同样失效并重建
+    fs.writeFileSync(memoryFile, "post-compaction content", "utf-8");
+    await harness.triggerCompaction("s-freeze");
+    const afterCompaction = await harness.buildSystemParts("s-freeze");
+    expect(afterCompaction[1].text).toContain("post-compaction content");
+
+    await harness.cleanup();
+  });
+});
+
+test("session.deleted clears session context cache", async () => {
+  await withTempHome(async (memoryDir) => {
+    fs.mkdirSync(memoryDir, { recursive: true });
+    const memoryFile = path.join(memoryDir, "MEMORY.md");
+    fs.writeFileSync(memoryFile, "before delete", "utf-8");
+
+    const harness = await createV2Harness(MemoryPlugin, { options: {} });
+    const before = await harness.buildSystem("s-del");
+    expect(before).toContain("before delete");
+
+    fs.writeFileSync(memoryFile, "after delete", "utf-8");
+    await harness.emitEvent({
+      type: "session.deleted",
+      data: { sessionID: "s-del" },
+    });
+
+    const after = await harness.buildSystem("s-del");
+    expect(after).toContain("after delete");
+
+    await harness.cleanup();
+  });
+});
+
 test("execute.after records memory calls and triggers daily reminder", async () => {
   await withTempHome(async () => {
     const harness = await createV2Harness(MemoryPlugin, { options: {} });

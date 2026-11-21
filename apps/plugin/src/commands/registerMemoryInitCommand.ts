@@ -6,6 +6,7 @@ type PluginContext = Plugin.Context;
 
 export interface MemoryInitCommandDependencies {
   bootstrapManager: BootstrapManager;
+  onInitialized?: (sessionID: string) => void;
 }
 
 /**
@@ -28,6 +29,7 @@ export async function registerMemoryInitCommand(
         if (deps.bootstrapManager.getInitState() === "ready") return;
 
         await deps.bootstrapManager.createInitTemplates();
+        deps.onInitialized?.(sessionID);
 
         const extra = prompt.text.trim();
         const text = extra

@@ -20,6 +20,17 @@ export interface V2Harness {
   ): Promise<string>;
   /** 触发 context hook，返回注入的 system 文本 */
   buildSystem(sessionID?: string): Promise<string>;
+  /** 触发 context hook，返回拆分后的 SystemPart 列表 */
+  buildSystemParts(
+    sessionID?: string,
+  ): Promise<Array<{ type: "text"; text: string }>>;
+  /** 触发 compaction hook */
+  triggerCompaction(sessionID?: string): Promise<void>;
+  /** 推送一条订阅事件（如 session.deleted） */
+  emitEvent(event: {
+    type: string;
+    data: Record<string, unknown>;
+  }): Promise<void>;
   /** 执行已注册的 memory-init 命令 */
   runMemoryInit(sessionID?: string, text?: string): Promise<void>;
   /** 触发 tool.execute.after */
@@ -62,6 +73,8 @@ export async function createV2Harness(
   const commandDefs: Array<{ name: string; execute: (input: any) => any }> = [];
 
   const controller = new AbortController();
+  const eventQueue: Array<{ type: string; data: Record<string, unknown> }> = [];
+  let wakeEventWaiter: (() => void) | null = null;
 
   const ctx: any = {
     options: options.options ?? {},
@@ -123,13 +136,23 @@ export async function createV2Harness(
       subscribe: () => ({
         [Symbol.asyncIterator]: () => ({
           next: () =>
-            new Promise<{ done: boolean; value?: never }>((resolve) => {
+            new Promise<{ done: boolean; value?: any }>((resolve) => {
+              if (eventQueue.length > 0) {
+                return resolve({ done: false, value: eventQueue.shift() });
+              }
               if (controller.signal.aborted) return resolve({ done: true });
-              controller.signal.addEventListener(
-                "abort",
-                () => resolve({ done: true }),
-                { once: true },
-              );
+              const onAbort = () => resolve({ done: true });
+              wakeEventWaiter = () => {
+                controller.signal.removeEventListener("abort", onAbort);
+                if (eventQueue.length > 0) {
+                  resolve({ done: false, value: eventQueue.shift() });
+                } else {
+                  resolve({ done: true });
+                }
+              };
+              controller.signal.addEventListener("abort", onAbort, {
+                once: true,
+              });
             }),
         }),
       }),
@@ -161,6 +184,11 @@ export async function createV2Harness(
     },
 
     async buildSystem(sessionID = "test-session") {
+      const parts = await this.buildSystemParts(sessionID);
+      return parts.map((part) => part.text).join("\n");
+    },
+
+    async buildSystemParts(sessionID = "test-session") {
       const hook = sessionHooks.context;
       if (!hook) throw new Error("context hook was not registered");
       const event = {
@@ -173,7 +201,29 @@ export async function createV2Harness(
         tools: {},
       };
       await hook(event);
-      return event.system.map((part) => part.text).join("\n");
+      return event.system;
+    },
+
+    async triggerCompaction(sessionID = "test-session") {
+      const hook = sessionHooks.compaction;
+      if (!hook) throw new Error("compaction hook was not registered");
+      await hook({
+        sessionID,
+        agent: "build",
+        model: { providerID: "test", id: "test-model" },
+        system: [],
+        messages: [],
+        options: {},
+        tools: {},
+      });
+    },
+
+    async emitEvent(event) {
+      eventQueue.push(event);
+      const wake = wakeEventWaiter;
+      wakeEventWaiter = null;
+      wake?.();
+      await new Promise((r) => setTimeout(r, 10));
     },
 
     async runMemoryInit(sessionID = "test-session", text = "") {

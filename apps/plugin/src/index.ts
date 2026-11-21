@@ -15,6 +15,10 @@ import { registerMemoryTool } from "./tool/registerMemoryTool.js";
 import { registerMemoryInitCommand } from "./commands/registerMemoryInitCommand.js";
 import { SessionProjectResolver } from "./session/SessionProjectResolver.js";
 import {
+  SessionContextCache,
+  shouldInvalidateContextCache,
+} from "./session/SessionContextCache.js";
+import {
   SessionStateStore,
   type MemoryCallInfo,
 } from "./session/SessionStateStore.js";
@@ -47,6 +51,7 @@ export function createMemoryPlugin(
       const bootstrapManager = new BootstrapManager(memoryManager);
       const projects = new SessionProjectResolver(ctx);
       const sessionStates = new SessionStateStore();
+      const contextCache = new SessionContextCache();
 
       /** 引导阶段优先展示 BOOTSTRAP.md；常规阶段注入 MEMORY / IDENTITY / USER / PROJECT */
       const buildContext = async (
@@ -81,47 +86,65 @@ export function createMemoryPlugin(
           : getMemoryAwarenessInstructions();
 
       // 1. 命令：/memory-init
-      await registerMemoryInitCommand(ctx, { bootstrapManager });
+      await registerMemoryInitCommand(ctx, {
+        bootstrapManager,
+        onInitialized: () => contextCache.invalidateAll(),
+      });
 
       // 2. 工具：memory
       await registerMemoryTool(ctx, { memoryManager, projects });
 
-      // 3. 工具执行后：记录本会话的 memory 操作，用于 daily 提醒
+      // 3. 工具执行后：记录本会话的 memory 操作，并在必要时精准失效会话注入快照
       await ctx.tool.hook("execute.after", (event) => {
         if (event.tool !== "memory") return;
         const input = (event.input ?? {}) as MemoryCallInfo;
-        sessionStates.record(
-          event.sessionID,
-          input,
-          event.status === "completed",
-        );
+        const completed = event.status === "completed";
+        sessionStates.record(event.sessionID, input, completed);
+        if (completed && shouldInvalidateContextCache(input)) {
+          contextCache.invalidate(event.sessionID);
+        }
       });
 
-      // 4. 模型请求前：注入记忆上下文与感知指令
+      // 4. 压缩发生时使对应会话快照失效，保证压缩后重新同步磁盘记忆
+      await ctx.session.hook("compaction", (event) => {
+        contextCache.invalidate(event.sessionID);
+      });
+
+      // 5. 模型请求前：按静态指令 / 冻结记忆快照 / 动态提醒拆分为独立 SystemPart
       await ctx.session.hook("context", async (event) => {
         const projectId = await projects.resolve(event.sessionID);
-        const memoryContext = await buildContext(projectId);
-        const instructions = getMemoryInstructions();
+        const snapshot = await contextCache.getOrBuild(
+          event.sessionID,
+          projectId,
+          async () => ({
+            instructions: getMemoryInstructions(),
+            memoryContext: await buildContext(projectId),
+          }),
+        );
 
-        let text = memoryContext + instructions;
-
-        // V2 的 server 端没有 V1 的 tui.showToast；
-        // 改为在系统上下文中提醒模型补记 daily 日志。
-        if (sessionStates.needsDailyReminder(event.sessionID)) {
-          text += [
-            "",
-            "## Memory Reminder",
-            "",
-            "This session has performed memory operations but has not updated the daily log.",
-            "Call memory with action 'write' and target 'daily' to record what happened.",
-          ].join("\n");
+        if (snapshot.instructions.trim()) {
+          event.system.push({ type: "text", text: snapshot.instructions });
+        }
+        if (snapshot.memoryContext.trim()) {
+          event.system.push({ type: "text", text: snapshot.memoryContext });
         }
 
-        if (!text.trim()) return;
-        event.system.push({ type: "text", text });
+        // V2 的 server 端没有 V1 的 tui.showToast；
+        // 改为在系统上下文末尾追加独立 SystemPart 提醒模型补记 daily 日志。
+        if (sessionStates.needsDailyReminder(event.sessionID)) {
+          event.system.push({
+            type: "text",
+            text: [
+              "## Memory Reminder",
+              "",
+              "This session has performed memory operations but has not updated the daily log.",
+              "Call memory with action 'write' and target 'daily' to record what happened.",
+            ].join("\n"),
+          });
+        }
       });
 
-      // 5. 会话生命周期：注册/清理状态与项目缓存，并维持事件订阅
+      // 6. 会话生命周期：注册/清理状态、项目与上下文快照缓存，并维持事件订阅
       const controller = new AbortController();
 
       void (async () => {
@@ -140,6 +163,7 @@ export function createMemoryPlugin(
             } else if (event.type === "session.deleted") {
               sessionStates.delete(event.data.sessionID);
               projects.delete(event.data.sessionID);
+              contextCache.delete(event.data.sessionID);
             }
           }
         } catch (error) {
@@ -155,6 +179,7 @@ export function createMemoryPlugin(
         controller.abort();
         sessionStates.clear();
         projects.clear();
+        contextCache.clear();
       };
     },
   });
