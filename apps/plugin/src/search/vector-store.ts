@@ -2,8 +2,14 @@ import type { LocalIndex } from "vectra";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { MemoryPaths } from "../memory/MemoryPaths.js";
+import { KeyedAsyncMutex } from "../utils/asyncMutex.js";
 import { validateProjectId } from "../utils/validation.js";
 import { getCurrentDtype, getCurrentModelId } from "./embedding.js";
+
+function isWithinDir(baseDir: string, targetPath: string): boolean {
+  const rel = path.relative(path.resolve(baseDir), path.resolve(targetPath));
+  return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
+}
 
 /**
  * 已向量化的文本切片，包含嵌入向量及其元数据。
@@ -80,6 +86,7 @@ export function filterCurrentSearchResults(
 export class VectorStore {
   private readonly paths: MemoryPaths;
   private readonly indices = new Map<string, LocalIndex>();
+  private readonly indexLocks = new KeyedAsyncMutex();
 
   constructor(memoryDir: string) {
     this.paths = new MemoryPaths(memoryDir);
@@ -93,17 +100,20 @@ export class VectorStore {
       return path.join(this.paths.projectDir(projectId), "root.index");
     }
 
-    if (filePath.startsWith(this.paths.dailyDir + path.sep)) {
+    if (isWithinDir(this.paths.dailyDir, filePath)) {
       return this.paths.dailyIndexPath;
     }
 
     return this.paths.rootIndexPath;
   }
 
-  /** 对单个文件的切片集合执行增量 upsert */
+  /** 对单个文件的切片集合执行增量 upsert（按索引目录串行加锁） */
   async upsertFile(filePath: string, chunks: EmbeddedChunk[]): Promise<void> {
-    const index = await this.getIndex(this.resolveIndexPath(filePath));
-    await upsertChunks(index, filePath, chunks);
+    const indexPath = this.resolveIndexPath(filePath);
+    await this.indexLocks.withLock(indexPath, async () => {
+      const index = await this.getIndex(indexPath);
+      await upsertChunks(index, filePath, chunks);
+    });
   }
 
   /** 在全局 root 和 daily 两套索引中并行语义搜索，合并后按得分降序取 topK */
@@ -111,14 +121,9 @@ export class VectorStore {
     queryVector: number[],
     topK: number = 20,
   ): Promise<SearchResult[]> {
-    const [rootIdx, dailyIdx] = await Promise.all([
-      this.getIndex(this.paths.rootIndexPath),
-      this.getIndex(this.paths.dailyIndexPath),
-    ]);
-
     const [rootResults, dailyResults] = await Promise.all([
-      this.queryIndex(rootIdx, queryVector, topK),
-      this.queryIndex(dailyIdx, queryVector, topK),
+      this.queryIndex(this.paths.rootIndexPath, queryVector, topK),
+      this.queryIndex(this.paths.dailyIndexPath, queryVector, topK),
     ]);
 
     const merged = [...rootResults, ...dailyResults];
@@ -134,8 +139,7 @@ export class VectorStore {
   ): Promise<SearchResult[]> {
     validateProjectId(projectId);
     const indexPath = path.join(this.paths.projectDir(projectId), "root.index");
-    const index = await this.getIndex(indexPath);
-    return this.queryIndex(index, queryVector, topK);
+    return this.queryIndex(indexPath, queryVector, topK);
   }
 
   /**
@@ -150,10 +154,12 @@ export class VectorStore {
     ];
 
     const staleSets = await Promise.all(
-      indexPaths.map(async (indexPath) => {
-        const index = await this.getIndex(indexPath);
-        return deleteStaleEmbeddings(index);
-      }),
+      indexPaths.map((indexPath) =>
+        this.indexLocks.withLock(indexPath, async () => {
+          const index = await this.getIndex(indexPath);
+          return deleteStaleEmbeddings(index);
+        }),
+      ),
     );
 
     const stalePaths = new Set<string>();
@@ -166,13 +172,16 @@ export class VectorStore {
   }
 
   private async queryIndex(
-    index: LocalIndex,
+    indexPath: string,
     queryVector: number[],
     topK: number,
   ): Promise<SearchResult[]> {
-    const limit = await getQueryLimit(index, topK);
-    const items = await index.queryItems(queryVector, "", limit);
-    return filterCurrentSearchResults(items as QuerySearchItem[]);
+    return this.indexLocks.withLock(indexPath, async () => {
+      const index = await this.getIndex(indexPath);
+      const limit = await getQueryLimit(index, topK);
+      const items = await index.queryItems(queryVector, "", limit);
+      return filterCurrentSearchResults(items as QuerySearchItem[]);
+    });
   }
 
   /**
@@ -194,9 +203,12 @@ export class VectorStore {
 
   private extractProjectId(filePath: string): string | null {
     const projectsDir = this.paths.projectsDir;
-    if (!filePath.startsWith(projectsDir + path.sep)) return null;
+    if (!isWithinDir(projectsDir, filePath)) return null;
 
-    const relative = path.relative(projectsDir, filePath);
+    const relative = path.relative(
+      path.resolve(projectsDir),
+      path.resolve(filePath),
+    );
     const segments = relative.split(path.sep);
 
     const dailyIdx = segments.indexOf("daily");
@@ -272,8 +284,12 @@ async function upsertChunks(
   );
   const toDelete: string[] = [];
 
+  const resolvedTarget = path.resolve(filePath);
   for (const item of existing) {
-    if (item.metadata && String(item.metadata.filePath) === filePath) {
+    if (
+      item.metadata &&
+      path.resolve(String(item.metadata.filePath)) === resolvedTarget
+    ) {
       const hash = item.metadata.hash ? String(item.metadata.hash) : null;
       if (hash) {
         const chunk = chunksByHash.get(hash);

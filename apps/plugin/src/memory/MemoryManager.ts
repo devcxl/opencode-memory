@@ -8,6 +8,7 @@ import type {
 import type { MemoryConfig } from "../config/runtime.js";
 import { ensureDir, readFileSafe } from "../utils/fs.js";
 import { atomicWrite } from "../utils/atomicWrite.js";
+import { KeyedAsyncMutex } from "../utils/asyncMutex.js";
 import { MemoryPaths } from "./MemoryPaths.js";
 import {
   checkLineLimit,
@@ -31,7 +32,8 @@ export class MemoryManager {
   private paths: MemoryPaths;
   private vectorStore: VectorStore;
   private fileSearcher: FileSearcher;
-  private freshIndexDone = false;
+  private freshIndexPromise: Promise<void> | null = null;
+  private readonly fileLocks = new KeyedAsyncMutex();
 
   constructor(config: MemoryConfig) {
     this.config = config;
@@ -48,10 +50,10 @@ export class MemoryManager {
   async ensureDirectories(): Promise<void> {
     ensureDir(this.config.memoryDir);
     ensureDir(this.paths.dailyDir);
-    if (!this.freshIndexDone) {
-      this.freshIndexDone = true;
-      await this.ensureFreshIndex();
+    if (!this.freshIndexPromise) {
+      this.freshIndexPromise = this.ensureFreshIndex();
     }
+    await this.freshIndexPromise;
   }
 
   private async ensureFreshIndex(): Promise<void> {
@@ -62,7 +64,9 @@ export class MemoryManager {
       const content = readFileSafe(filePath);
       if (!content) continue;
       try {
-        await this.embedAndIndex(filePath, content);
+        await this.fileLocks.withLock(filePath, () =>
+          this.embedAndIndex(filePath, content),
+        );
       } catch {
         // 单个文件重建失败不影响其他文件
       }
@@ -181,12 +185,14 @@ export class MemoryManager {
 
   /** 写入文件并触发向量索引与 git 提交 */
   async writeFile(filePath: string, content: string): Promise<void> {
-    checkLineLimit(filePath, content);
-    await this.persistAndIndex(
-      filePath,
-      content,
-      `Update ${path.basename(filePath)}`,
-    );
+    await this.fileLocks.withLock(filePath, async () => {
+      checkLineLimit(filePath, content);
+      await this.persistAndIndex(
+        filePath,
+        content,
+        `Update ${path.basename(filePath)}`,
+      );
+    });
   }
 
   /**
@@ -198,28 +204,30 @@ export class MemoryManager {
     oldString: string,
     newString: string,
   ): Promise<void> {
-    const content = readFileSafe(filePath);
-    if (!content) {
-      throw new Error("File not found or empty");
-    }
+    await this.fileLocks.withLock(filePath, async () => {
+      const content = readFileSafe(filePath);
+      if (!content) {
+        throw new Error("File not found or empty");
+      }
 
-    if (!content.includes(oldString)) {
-      throw new Error("oldString not found in file");
-    }
+      if (!content.includes(oldString)) {
+        throw new Error("oldString not found in file");
+      }
 
-    const matches = content.split(oldString).length - 1;
-    if (matches > 1) {
-      throw new Error(
-        `Found ${matches} occurrences of oldString, expected exactly 1`,
+      const matches = content.split(oldString).length - 1;
+      if (matches > 1) {
+        throw new Error(
+          `Found ${matches} occurrences of oldString, expected exactly 1`,
+        );
+      }
+
+      const updatedContent = content.replace(oldString, newString);
+      await this.persistAndIndex(
+        filePath,
+        updatedContent,
+        `Edit ${path.basename(filePath)}`,
       );
-    }
-
-    const updatedContent = content.replace(oldString, newString);
-    await this.persistAndIndex(
-      filePath,
-      updatedContent,
-      `Edit ${path.basename(filePath)}`,
-    );
+    });
   }
 
   /**
@@ -238,47 +246,51 @@ export class MemoryManager {
       project,
     );
 
-    const content = readFileSafe(filePath);
-    if (!content) {
-      throw new Error(`${displayName} not found or empty`);
-    }
+    return this.fileLocks.withLock(filePath, async () => {
+      const content = readFileSafe(filePath);
+      if (!content) {
+        throw new Error(`${displayName} not found or empty`);
+      }
 
-    const entries = parseContentByTimestamp(content);
-    const filteredEntries = entries.filter(
-      (entry) => entry.timestamp !== timestamp,
-    );
+      const entries = parseContentByTimestamp(content);
+      const filteredEntries = entries.filter(
+        (entry) => entry.timestamp !== timestamp,
+      );
 
-    if (filteredEntries.length === entries.length) {
-      throw new Error(`No entries found matching timestamp: ${timestamp}`);
-    }
+      if (filteredEntries.length === entries.length) {
+        throw new Error(`No entries found matching timestamp: ${timestamp}`);
+      }
 
-    const newContent = filteredEntries
-      .map((e) => `<!-- ${e.timestamp} -->\n${e.content}`)
-      .join("\n\n");
+      const newContent = filteredEntries
+        .map((e) => `<!-- ${e.timestamp} -->\n${e.content}`)
+        .join("\n\n");
 
-    await this.persistAndIndex(
-      filePath,
-      newContent,
-      `Delete entries from ${path.basename(filePath)}`,
-    );
+      await this.persistAndIndex(
+        filePath,
+        newContent,
+        `Delete entries from ${path.basename(filePath)}`,
+      );
 
-    return `Deleted ${entries.length - filteredEntries.length} entries from ${displayName}`;
+      return `Deleted ${entries.length - filteredEntries.length} entries from ${displayName}`;
+    });
   }
 
   /** 以追加方式写入文件，自动添加时间戳标记 */
   async appendFile(filePath: string, content: string): Promise<void> {
-    const timestamp = this.getLocalTimestamp();
-    const stamped = `<!-- ${timestamp} -->\n${content}`;
-    const existing = readFileSafe(filePath);
-    const separator = existing?.trim() ? "\n\n" : "";
-    const newContent = (existing ?? "") + separator + stamped;
+    await this.fileLocks.withLock(filePath, async () => {
+      const timestamp = this.getLocalTimestamp();
+      const stamped = `<!-- ${timestamp} -->\n${content}`;
+      const existing = readFileSafe(filePath);
+      const separator = existing?.trim() ? "\n\n" : "";
+      const newContent = (existing ?? "") + separator + stamped;
 
-    checkLineLimit(filePath, newContent);
-    await this.persistAndIndex(
-      filePath,
-      newContent,
-      `Append to ${path.basename(filePath)}`,
-    );
+      checkLineLimit(filePath, newContent);
+      await this.persistAndIndex(
+        filePath,
+        newContent,
+        `Append to ${path.basename(filePath)}`,
+      );
+    });
   }
 
   /** 获取本地时间戳字符串 YYYY-MM-DD HH:MM:SS */

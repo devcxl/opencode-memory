@@ -308,11 +308,48 @@ test("getPluginConfigOption reads opencode-memory plugin option", () => {
   });
 });
 
-test("getPluginConfigOption falls back on invalid opencode config", () => {
-  withTempHome((homeDir) => {
-    writeRawOpencodeConfig(homeDir, "{ invalid json");
+test("getPluginConfigOption falls back on invalid opencode config and logs warning", () => {
+  const warnings: string[] = [];
+  const origWarn = console.warn;
+  console.warn = (...args: unknown[]) =>
+    warnings.push(args.map(String).join(" "));
 
-    expect(getPluginConfigOption("dtype")).toBeUndefined();
+  try {
+    withTempHome((homeDir) => {
+      writeRawOpencodeConfig(homeDir, "{ invalid json");
+
+      expect(getPluginConfigOption("dtype")).toBeUndefined();
+      expect(warnings.some((w) => w.includes("Failed to parse"))).toBe(true);
+    });
+  } finally {
+    console.warn = origWarn;
+  }
+});
+
+test("getPluginConfigObject parses JSONC with line/block comments and preserves URLs inside strings", () => {
+  withTempHome((homeDir) => {
+    const jsoncConfig = `{
+  // 顶部行注释
+  "$schema": "https://opencode.ai/config.json",
+  /* 多行
+     块注释 */
+  "note": "literal // and /* comment */ and ,} inside string",
+  "plugins": [
+    {
+      "package": "@devcxl/opencode-memory",
+      "options": {
+        "dtype": "q8", // 行尾注释在逗号后
+        "embeddingModel": "jina-embeddings-v2-base-zh",
+      },
+    },
+  ],
+}`;
+    writeRawOpencodeConfig(homeDir, jsoncConfig);
+
+    const opts = getPluginConfigObject();
+    expect(opts).toBeDefined();
+    expect(opts!.dtype).toBe("q8");
+    expect(opts!.embeddingModel).toBe("jina-embeddings-v2-base-zh");
   });
 });
 
@@ -546,4 +583,51 @@ test("VectorStore.resolveIndexPath routes global, daily, and project files under
       "/custom/mem/projects/owner/repo/daily/2026-11-21.md",
     ),
   ).toBe("/custom/mem/projects/owner/repo/root.index");
+});
+
+test("VectorStore.refreshStaleIndices cleans stale project embeddings strictly inside custom memoryDir", async () => {
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "opm-vec-"));
+  const customMemDir = path.join(tmpRoot, "custom-memory");
+  const projFile = path.join(
+    customMemDir,
+    "projects",
+    "owner",
+    "repo",
+    "MEMORY.md",
+  );
+
+  try {
+    fs.mkdirSync(path.dirname(projFile), { recursive: true });
+    fs.writeFileSync(projFile, "project knowledge", "utf-8");
+
+    const store = new VectorStore(customMemDir);
+    await store.upsertFile(projFile, [
+      {
+        vector: [1, 0, 0],
+        metadata: {
+          filePath: projFile,
+          heading: "",
+          text: "project knowledge",
+          hash: "h1",
+          embeddingModel: "legacy-model-v0",
+          embeddingDtype: getCurrentDtype(),
+        },
+      },
+    ]);
+
+    const stalePaths = await store.refreshStaleIndices();
+    expect(stalePaths).toEqual([projFile]);
+
+    // 清理后，同一项目索引查询不再返回 stale 结果
+    const remaining = await store.searchProject("owner/repo", [1, 0, 0], 5);
+    expect(remaining).toHaveLength(0);
+    // 确保项目索引仅生成在 customMemDir 内
+    expect(
+      fs.existsSync(
+        path.join(customMemDir, "projects", "owner", "repo", "root.index"),
+      ),
+    ).toBe(true);
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
 });

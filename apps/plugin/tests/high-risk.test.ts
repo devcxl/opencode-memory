@@ -1,9 +1,16 @@
-import { beforeEach, expect, test } from "bun:test";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  expect,
+  mock,
+  spyOn,
+  test,
+} from "bun:test";
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { mock } from "bun:test";
 
 import { MemoryPaths } from "../src/memory/MemoryPaths.js";
 
@@ -28,75 +35,51 @@ mock.module("../src/search/embedding.js", () => ({
   initEmbedder: async () => {},
 }));
 
-mock.module("../src/search/vector-store.js", () => ({
-  isCurrentEmbeddingMetadata: (metadata: Record<string, unknown> | undefined) =>
-    String(metadata?.embeddingModel) === currentModelId &&
-    String(metadata?.embeddingDtype) === currentDtype,
-  filterCurrentSearchResults: (items: any[]) =>
-    items
-      .filter(
-        (item) =>
-          String(item.item.metadata.embeddingModel) === currentModelId &&
-          String(item.item.metadata.embeddingDtype) === currentDtype,
-      )
-      .map((item) => ({
-        score: item.score,
-        filePath: String(item.item.metadata.filePath),
-        heading: String(item.item.metadata.heading),
-        text: String(item.item.metadata.text),
-        timestamp: item.item.metadata.timestamp
-          ? String(item.item.metadata.timestamp)
-          : undefined,
-      })),
-  VectorStore: class {
-    private readonly paths: MemoryPaths;
+const { VectorStore } = await import("../src/search/vector-store.js");
+let vectorStoreSpies: Array<{ mockRestore(): void }> = [];
 
-    constructor(memoryDir: string) {
-      this.paths = new MemoryPaths(memoryDir);
-    }
+beforeAll(() => {
+  vectorStoreSpies = [
+    spyOn(VectorStore.prototype, "upsertFile").mockImplementation(
+      async function (
+        this: InstanceType<typeof VectorStore>,
+        filePath,
+        chunks,
+      ) {
+        const indexPath = this.resolveIndexPath(filePath);
+        const dirName = path.dirname(indexPath);
+        const projectsDir = (this as any).paths.projectsDir;
+        if (filePath.startsWith(projectsDir + path.sep)) {
+          projectStoreBasePaths.push(dirName);
+        }
+        upsertCalls.push({ filePath, chunks });
+      },
+    ),
+    spyOn(VectorStore.prototype, "searchGlobal").mockImplementation(
+      async (_queryVector, topK = 20) => {
+        semanticSearchCalls.push(topK);
+        return Number.isFinite(topK)
+          ? semanticResults.slice(0, topK)
+          : semanticResults;
+      },
+    ),
+    spyOn(VectorStore.prototype, "searchProject").mockImplementation(
+      async function (this: InstanceType<typeof VectorStore>, projectId) {
+        projectStoreBasePaths.push((this as any).paths.projectDir(projectId));
+        return projectSemanticResults;
+      },
+    ),
+    spyOn(VectorStore.prototype, "refreshStaleIndices").mockImplementation(
+      async () => [],
+    ),
+  ];
+});
 
-    resolveIndexPath(filePath: string): string {
-      if (filePath.startsWith(this.paths.projectsDir + path.sep)) {
-        const rel = path.relative(this.paths.projectsDir, filePath);
-        const segs = rel.split(path.sep);
-        const dailyIdx = segs.indexOf("daily");
-        const projectId =
-          dailyIdx > 0 && dailyIdx < segs.length - 1
-            ? segs.slice(0, dailyIdx).join("/")
-            : segs.slice(0, -1).join("/");
-        return path.join(this.paths.projectDir(projectId), "root.index");
-      }
-      if (filePath.startsWith(this.paths.dailyDir + path.sep)) {
-        return this.paths.dailyIndexPath;
-      }
-      return this.paths.rootIndexPath;
-    }
-
-    async upsertFile(filePath: string, chunks: any[]) {
-      const indexPath = this.resolveIndexPath(filePath);
-      if (filePath.startsWith(this.paths.projectsDir + path.sep)) {
-        projectStoreBasePaths.push(path.dirname(indexPath));
-      }
-      upsertCalls.push({ filePath, chunks });
-    }
-
-    async searchGlobal(_queryVector: number[], topK: number) {
-      semanticSearchCalls.push(topK);
-      return Number.isFinite(topK)
-        ? semanticResults.slice(0, topK)
-        : semanticResults;
-    }
-
-    async searchProject(projectId: string) {
-      projectStoreBasePaths.push(this.paths.projectDir(projectId));
-      return projectSemanticResults;
-    }
-
-    async refreshStaleIndices(): Promise<string[]> {
-      return [];
-    }
-  },
-}));
+afterAll(() => {
+  for (const spy of vectorStoreSpies) {
+    spy.mockRestore();
+  }
+});
 
 mock.module("@opencode/plugin", () => ({
   Plugin: {
@@ -1346,6 +1329,34 @@ test("detectProject with HTTPS without .git suffix", () => {
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// =============================================================================
+// M0 (#34): 并发写入一致性与原子落盘测试
+// =============================================================================
+
+test("concurrent appendFile calls on the same file do not lose updates", async () => {
+  await withTempMemory(async (memoryDir) => {
+    const manager = new MemoryManager({ memoryDir });
+    await manager.ensureDirectories();
+    const targetFile = path.join(memoryDir, "MEMORY.md");
+
+    const count = 10;
+    await Promise.all(
+      Array.from({ length: count }, (_, idx) =>
+        manager.appendFile(targetFile, `concurrent-entry-${idx}`),
+      ),
+    );
+
+    const content = fs.readFileSync(targetFile, "utf-8");
+    for (let idx = 0; idx < count; idx++) {
+      expect(content).toContain(`concurrent-entry-${idx}`);
+    }
+    const leftovers = fs
+      .readdirSync(memoryDir)
+      .filter((name) => name.includes(".tmp."));
+    expect(leftovers).toHaveLength(0);
+  });
 });
 
 // =============================================================================
