@@ -33,7 +33,7 @@
     "access": "public"
   },
   "dependencies": {
-    "@opencode/plugin": "^2.3.0",
+    "@opencode/plugin": "^2.3.2",
     "zod": "^4.1.8"
   },
   "optionalDependencies": {
