@@ -5,6 +5,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { mock } from "bun:test";
 
+import { MemoryPaths } from "../src/memory/MemoryPaths.js";
+
 const embeddedTexts: string[] = [];
 const upsertCalls: Array<{ filePath: string; chunks: any[] }> = [];
 const projectStoreBasePaths: string[] = [];
@@ -27,11 +29,6 @@ mock.module("../src/search/embedding.js", () => ({
 }));
 
 mock.module("../src/search/vector-store.js", () => ({
-  upsertFile: async (filePath: string, chunks: any[]) => {
-    upsertCalls.push({ filePath, chunks });
-  },
-  deleteFileVectors: async () => {},
-  refreshStaleIndices: async (): Promise<string[]> => [],
   isCurrentEmbeddingMetadata: (metadata: Record<string, unknown> | undefined) =>
     String(metadata?.embeddingModel) === currentModelId &&
     String(metadata?.embeddingDtype) === currentDtype,
@@ -51,24 +48,52 @@ mock.module("../src/search/vector-store.js", () => ({
           ? String(item.item.metadata.timestamp)
           : undefined,
       })),
-  semanticSearch: async (_queryVector: number[], topK: number) => {
-    semanticSearchCalls.push(topK);
-    return Number.isFinite(topK)
-      ? semanticResults.slice(0, topK)
-      : semanticResults;
-  },
-  checkIndexExists: async () => false,
-  ProjectStore: class {
-    constructor(basePath: string) {
-      projectStoreBasePaths.push(basePath);
+  VectorStore: class {
+    private readonly paths: MemoryPaths;
+
+    constructor(memoryDir: string) {
+      this.paths = new MemoryPaths(memoryDir);
+    }
+
+    resolveIndexPath(filePath: string): string {
+      if (filePath.startsWith(this.paths.projectsDir + path.sep)) {
+        const rel = path.relative(this.paths.projectsDir, filePath);
+        const segs = rel.split(path.sep);
+        const dailyIdx = segs.indexOf("daily");
+        const projectId =
+          dailyIdx > 0 && dailyIdx < segs.length - 1
+            ? segs.slice(0, dailyIdx).join("/")
+            : segs.slice(0, -1).join("/");
+        return path.join(this.paths.projectDir(projectId), "root.index");
+      }
+      if (filePath.startsWith(this.paths.dailyDir + path.sep)) {
+        return this.paths.dailyIndexPath;
+      }
+      return this.paths.rootIndexPath;
     }
 
     async upsertFile(filePath: string, chunks: any[]) {
+      const indexPath = this.resolveIndexPath(filePath);
+      if (filePath.startsWith(this.paths.projectsDir + path.sep)) {
+        projectStoreBasePaths.push(path.dirname(indexPath));
+      }
       upsertCalls.push({ filePath, chunks });
     }
 
-    async search() {
+    async searchGlobal(_queryVector: number[], topK: number) {
+      semanticSearchCalls.push(topK);
+      return Number.isFinite(topK)
+        ? semanticResults.slice(0, topK)
+        : semanticResults;
+    }
+
+    async searchProject(projectId: string) {
+      projectStoreBasePaths.push(this.paths.projectDir(projectId));
       return projectSemanticResults;
+    }
+
+    async refreshStaleIndices(): Promise<string[]> {
+      return [];
     }
   },
 }));
@@ -477,6 +502,21 @@ test("resolveProjectId handles scope correctly", () => {
   expect(resolveProjectId("project", "../repo")).toBeNull();
 });
 
+function makeMockVectorBackend(onProjectSearch?: () => Promise<any[]>) {
+  return {
+    searchGlobal: async (_queryVector: number[], topK: number) => {
+      semanticSearchCalls.push(topK);
+      return Number.isFinite(topK)
+        ? semanticResults.slice(0, topK)
+        : semanticResults;
+    },
+    searchProject: async () => {
+      if (onProjectSearch) return onProjectSearch();
+      throw new Error("project store should not be used");
+    },
+  };
+}
+
 test("semantic search with project scope only returns project results", async () => {
   const { homeDir, memoryDir } = makeTempHome();
   const dailyDir = path.join(memoryDir, "daily");
@@ -514,10 +554,7 @@ test("semantic search with project scope only returns project results", async ()
     const searcher = new FileSearcher(
       memoryDir,
       dailyDir,
-      () =>
-        ({
-          search: async () => projectSemanticResults,
-        }) as any,
+      makeMockVectorBackend(async () => projectSemanticResults),
     );
 
     const results = await searcher.semanticSearch(
@@ -553,9 +590,11 @@ test("semantic search with project scope falls back to global without project id
       },
     ];
 
-    const searcher = new FileSearcher(memoryDir, dailyDir, () => {
-      throw new Error("project store should not be used");
-    });
+    const searcher = new FileSearcher(
+      memoryDir,
+      dailyDir,
+      makeMockVectorBackend(),
+    );
 
     const results = await searcher.semanticSearch(
       "searchable",
@@ -601,9 +640,11 @@ test("semantic search filters by the matched chunk timestamp", async () => {
       },
     ];
 
-    const searcher = new FileSearcher(memoryDir, dailyDir, () => {
-      throw new Error("project store should not be used");
-    });
+    const searcher = new FileSearcher(
+      memoryDir,
+      dailyDir,
+      makeMockVectorBackend(),
+    );
 
     const results = await searcher.semanticSearch(
       "new searchable content",
@@ -645,9 +686,11 @@ test("semantic search filters after enough results are retrieved for period", as
       },
     ];
 
-    const searcher = new FileSearcher(memoryDir, dailyDir, () => {
-      throw new Error("project store should not be used");
-    });
+    const searcher = new FileSearcher(
+      memoryDir,
+      dailyDir,
+      makeMockVectorBackend(),
+    );
 
     const results = await searcher.semanticSearch(
       "target",
@@ -691,9 +734,11 @@ test("semantic search does not fallback to the first timestamp when multiple ent
       },
     ];
 
-    const searcher = new FileSearcher(memoryDir, dailyDir, () => {
-      throw new Error("project store should not be used");
-    });
+    const searcher = new FileSearcher(
+      memoryDir,
+      dailyDir,
+      makeMockVectorBackend(),
+    );
 
     const results = await searcher.semanticSearch(
       "unmatched",
@@ -736,9 +781,11 @@ test("semantic search does not bind a cross-entry legacy chunk to the first time
       },
     ];
 
-    const searcher = new FileSearcher(memoryDir, dailyDir, () => {
-      throw new Error("project store should not be used");
-    });
+    const searcher = new FileSearcher(
+      memoryDir,
+      dailyDir,
+      makeMockVectorBackend(),
+    );
 
     const results = await searcher.semanticSearch(
       "searchable",

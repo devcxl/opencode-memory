@@ -13,14 +13,27 @@ import {
   extractTimestamps,
   parseContentByTimestamp,
 } from "../utils/timestampParser.js";
-import type { ProjectStore } from "../search/vector-store.js";
+import type { SearchResult as VectorSearchResult } from "../search/vector-store.js";
+
+/** FileSearcher 所需的向量检索接口 */
+export interface VectorSearchBackend {
+  searchGlobal(
+    queryVector: number[],
+    topK: number,
+  ): Promise<VectorSearchResult[]>;
+  searchProject(
+    projectId: string,
+    queryVector: number[],
+    topK: number,
+  ): Promise<VectorSearchResult[]>;
+}
 
 /** 封装对 memory 文件的搜索和列举逻辑，支持关键词搜索、语义搜索、列表分组 */
 export class FileSearcher {
   constructor(
     private memoryDir: string,
     private dailyDir: string,
-    private getProjectStore: (projectId: string) => ProjectStore,
+    private vectorStore: VectorSearchBackend,
   ) {}
 
   /**
@@ -88,19 +101,21 @@ export class FileSearcher {
     scope: SearchScope = "all",
   ): Promise<SemanticSearchResult[]> {
     const queryVector = await embedText(query);
-    const module = await import("../search/vector-store.js");
     // period 过滤时先取全部结果（或超大上限），在内存中过滤
     const searchLimit = period ? Number.POSITIVE_INFINITY : maxResults;
     const includeGlobal = scope !== "project" || !projectId;
     const results = includeGlobal
-      ? await module.semanticSearch(queryVector, searchLimit)
+      ? await this.vectorStore.searchGlobal(queryVector, searchLimit)
       : [];
 
     // 项目搜索：project scope 只查项目；all scope 与全局合并。
     if (projectId && scope !== "global") {
-      const store = this.getProjectStore(projectId);
       try {
-        const projectResults = await store.search(queryVector, searchLimit);
+        const projectResults = await this.vectorStore.searchProject(
+          projectId,
+          queryVector,
+          searchLimit,
+        );
         results.push(...projectResults);
         results.sort((a, b) => b.score - a.score);
       } catch {}

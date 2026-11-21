@@ -1,111 +1,9 @@
 import type { LocalIndex } from "vectra";
+import * as fs from "node:fs";
 import * as path from "node:path";
-import { getMemoryDir } from "../config/runtime.js";
 import { MemoryPaths } from "../memory/MemoryPaths.js";
+import { validateProjectId } from "../utils/validation.js";
 import { getCurrentDtype, getCurrentModelId } from "./embedding.js";
-
-// ─── 索引实例（单例） ──────────────────────────────────────
-
-const memoryPaths = new MemoryPaths(getMemoryDir());
-
-let rootIndex: LocalIndex | null = null;
-let dailyIndex: LocalIndex | null = null;
-
-/**
- * 打开（必要时创建）一个 vectra 本地索引。
- *
- * `vectra` 是 optionalDependency，静态 import 会让整个插件模块在缺失该包时直接
- * 加载失败。这里改为首次访问索引时动态加载，让 setup 里的可选依赖检查先给出统一、
- * 可操作的错误。
- */
-async function openIndex(indexPath: string): Promise<LocalIndex> {
-  const { LocalIndex: LocalIndexCtor } = await import("vectra");
-  const index = new LocalIndexCtor(indexPath);
-  if (!(await index.isIndexCreated())) {
-    await index.createIndex();
-  }
-  return index;
-}
-
-function getRootIndexPath(): string {
-  return memoryPaths.rootIndexPath;
-}
-
-function getDailyIndexPath(): string {
-  return memoryPaths.dailyIndexPath;
-}
-
-/** 获取 root 索引，首次访问时自动初始化本地索引文件 */
-async function getRootIndex(): Promise<LocalIndex> {
-  if (!rootIndex) {
-    rootIndex = await openIndex(getRootIndexPath());
-  }
-  return rootIndex;
-}
-
-/** 获取 daily 索引，首次访问时自动初始化本地索引文件 */
-async function getDailyIndex(): Promise<LocalIndex> {
-  if (!dailyIndex) {
-    dailyIndex = await openIndex(getDailyIndexPath());
-  }
-  return dailyIndex;
-}
-
-/**
- * 计算实际查询限制。
- * 当 topK 为有限数值时直接使用，否则回退到索引总量，避免查询时超限抛错。
- */
-async function getQueryLimit(index: LocalIndex, topK: number): Promise<number> {
-  if (Number.isFinite(topK)) {
-    return topK;
-  }
-
-  const items = await index.listItems();
-  return Math.max(items.length, 1);
-}
-
-/**
- * 判断向量条目的嵌入元数据是否与当前模型/dtype 匹配。
- * 不匹配的条目视为"stale"，需在索引刷新时清除重建。
- */
-export function isCurrentEmbeddingMetadata(
-  metadata: Record<string, unknown> | undefined,
-): boolean {
-  return (
-    String(metadata?.embeddingModel) === getCurrentModelId() &&
-    String(metadata?.embeddingDtype) === getCurrentDtype()
-  );
-}
-
-/**
- * 删除索引中所有与当前模型/dtype 不匹配的 stale 条目。
- * @returns 被删除条目对应的文件路径集合，用于触发重建
- */
-async function deleteStaleEmbeddings(index: LocalIndex): Promise<Set<string>> {
-  const stalePaths = new Set<string>();
-  const items = await index.listItems();
-  for (const item of items) {
-    if (!isCurrentEmbeddingMetadata(item.metadata)) {
-      const filePath = String(item.metadata?.filePath ?? "");
-      if (filePath) stalePaths.add(filePath);
-      await index.deleteItem(String(item.id));
-    }
-  }
-  return stalePaths;
-}
-
-/** 触发 root 与 daily 索引的懒初始化，清理 stale embedding，返回被清理影响的文件路径列表 */
-export async function refreshStaleIndices(): Promise<string[]> {
-  const [rootIdx, dailyIdx] = await Promise.all([
-    getRootIndex(),
-    getDailyIndex(),
-  ]);
-  const [rootStale, dailyStale] = await Promise.all([
-    deleteStaleEmbeddings(rootIdx),
-    deleteStaleEmbeddings(dailyIdx),
-  ]);
-  return [...rootStale, ...dailyStale];
-}
 
 /**
  * 已向量化的文本切片，包含嵌入向量及其元数据。
@@ -116,94 +14,6 @@ export interface EmbeddedChunk {
   vector: number[];
   /** 与向量关联的元数据键值对 */
   metadata: Record<string, string>;
-}
-
-/**
- * 基于 hash 对索引执行增量 upsert，被 upsertFile 和 ProjectStore.upsertFile 共用。
- *
- * 三步增量策略：
- * 1. 对已存在条目按 hash 建表，找出需要删除的条目（hash 不匹配或模型/dtype 已变更）
- * 2. 对 hash 表反向比对：存在于索引但不存在于新 chunks 中的条目标记删除
- * 3. 对新 chunks 中 hash 未命中已有索引的条目执行插入
- */
-async function upsertChunks(
-  index: LocalIndex,
-  filePath: string,
-  chunks: EmbeddedChunk[],
-): Promise<void> {
-  const existing = await index.listItems();
-  // 已存在条目 hash → id 的映射，用于避免重复插入
-  const existingByHash = new Map<string, string>();
-  // 新 chunks 的 hash → chunk 映射
-  const chunksByHash = new Map(
-    chunks.map((chunk) => [chunk.metadata.hash, chunk]),
-  );
-  const toDelete: string[] = [];
-
-  for (const item of existing) {
-    if (item.metadata && String(item.metadata.filePath) === filePath) {
-      const hash = item.metadata.hash ? String(item.metadata.hash) : null;
-      if (hash) {
-        const chunk = chunksByHash.get(hash);
-        if (
-          chunk &&
-          // 同 hash 但 embedding 模型/dtype 已变更 → 需要重新嵌入
-          (String(item.metadata.embeddingModel) !==
-            chunk.metadata.embeddingModel ||
-            String(item.metadata.embeddingDtype) !==
-              chunk.metadata.embeddingDtype)
-        ) {
-          toDelete.push(String(item.id));
-          continue;
-        }
-        // hash 匹配且 embedding 元数据一致 → 已存在，跳过插入
-        existingByHash.set(hash, String(item.id));
-      } else {
-        // 旧数据没有 hash 字段 → 无法比对，删除重建
-        toDelete.push(String(item.id));
-      }
-    }
-  }
-
-  // 第二步：新 chunks 的 hash 集合，用于反向删除已消失的条目
-  const newHashes = new Set(chunks.map((c) => c.metadata.hash));
-
-  for (const [hash, id] of existingByHash) {
-    if (!newHashes.has(hash)) {
-      toDelete.push(id);
-    }
-  }
-
-  // 批量删除所有标记的条目
-  for (const id of toDelete) {
-    await index.deleteItem(id);
-  }
-
-  // 第三步：仅对 hash 表中不存在的 chunk 执行插入，实现增量
-  for (const { vector, metadata } of chunks) {
-    if (!existingByHash.has(metadata.hash)) {
-      await index.insertItem({ vector, metadata });
-    }
-  }
-}
-
-/**
- * 对单个文件的切片集合执行增量 upsert。
- *
- * 策略：通过 hash 比对实现增量更新——仅插入新切片、删除已消失的切片、
- * 跳过内容未变的切片。避免全量重建索引，降低 token 消耗。
- *
- * @param filePath - 文件路径，用于判断归属 root 还是 daily 索引
- * @param chunks  - 该文件最新的切片集合
- */
-export async function upsertFile(
-  filePath: string,
-  chunks: EmbeddedChunk[],
-): Promise<void> {
-  const index = filePath.includes("/daily/")
-    ? await getDailyIndex()
-    : await getRootIndex();
-  await upsertChunks(index, filePath, chunks);
 }
 
 /** 语义搜索返回的单条结果 */
@@ -220,10 +30,23 @@ export interface SearchResult {
   timestamp?: string;
 }
 
-/** vectra queryItems 返回的原始条目结构，仅映射搜素需用字段 */
+/** vectra queryItems 返回的原始条目结构，仅映射搜索需用字段 */
 interface QuerySearchItem {
   score: number;
   item: { metadata: Record<string, unknown> };
+}
+
+/**
+ * 判断向量条目的嵌入元数据是否与当前模型/dtype 匹配。
+ * 不匹配的条目视为"stale"，需在索引刷新时清除重建。
+ */
+export function isCurrentEmbeddingMetadata(
+  metadata: Record<string, unknown> | undefined,
+): boolean {
+  return (
+    String(metadata?.embeddingModel) === getCurrentModelId() &&
+    String(metadata?.embeddingDtype) === getCurrentDtype()
+  );
 }
 
 /**
@@ -247,113 +70,244 @@ export function filterCurrentSearchResults(
 }
 
 /**
- * 在 root 和 daily 两套索引中同时执行语义搜索，合并后按得分降序取 topK。
+ * 统一的本地 Vectra 向量索引管理器。
  *
- * 跨索引合并：先在每个索引获取 topK 条结果，过滤 stale 条目后合并排序，
- * 最后截断到 topK。这保证即使一个索引为空，另一个仍有结果。
- *
- * @param queryVector - 查询文本的嵌入向量
- * @param topK        - 返回结果上限（默认 20）
- * @returns 按相关度降序排列的搜索结果
+ * 与特定 memoryDir 实例绑定（无模块级全局路径单例），统一管理：
+ * - 全局 root.index（MEMORY.md / IDENTITY.md / USER.md）
+ * - 全局 daily.index（daily/*.md）
+ * - 项目级 projects/<projectId>/root.index（项目 MEMORY 与 daily）
  */
-export async function semanticSearch(
-  queryVector: number[],
-  topK: number = 20,
-): Promise<SearchResult[]> {
-  const results: SearchResult[] = [];
+export class VectorStore {
+  private readonly paths: MemoryPaths;
+  private readonly indices = new Map<string, LocalIndex>();
 
-  const rootIdx = await getRootIndex();
-  const dailyIdx = await getDailyIndex();
-  // 分别查询，避免一个索引为空时全部无结果
-  const [rootTopK, dailyTopK] = await Promise.all([
-    getQueryLimit(rootIdx, topK),
-    getQueryLimit(dailyIdx, topK),
-  ]);
+  constructor(memoryDir: string) {
+    this.paths = new MemoryPaths(memoryDir);
+  }
 
-  const [rootResults, dailyResults] = await Promise.all([
-    rootIdx.queryItems(queryVector, "", rootTopK),
-    dailyIdx.queryItems(queryVector, "", dailyTopK),
-  ]);
-
-  results.push(...filterCurrentSearchResults(rootResults as QuerySearchItem[]));
-  results.push(
-    ...filterCurrentSearchResults(dailyResults as QuerySearchItem[]),
-  );
-
-  results.sort((a, b) => b.score - a.score);
-  return results.slice(0, topK);
-}
-
-/**
- * 从索引中删除指定文件的所有切片向量。
- * 用于文件被删除或移出 watch 范围时的清理。
- *
- * @param filePath - 目标文件路径
- */
-export async function deleteFileVectors(filePath: string): Promise<void> {
-  const index = filePath.includes("/daily/")
-    ? await getDailyIndex()
-    : await getRootIndex();
-  const existing = await index.listItems();
-
-  for (const item of existing) {
-    if (item.metadata && String(item.metadata.filePath) === filePath) {
-      await index.deleteItem(String(item.id));
+  /** 根据文件路径推导归属的向量索引目录 */
+  resolveIndexPath(filePath: string): string {
+    const projectId = this.extractProjectId(filePath);
+    if (projectId) {
+      validateProjectId(projectId);
+      return path.join(this.paths.projectDir(projectId), "root.index");
     }
-  }
-}
 
-/**
- * 项目级独立的向量存储。
- *
- * 与全局的 root/daily 分离，每个 ProjectStore 实例管理自己的 vectra 索引，
- * 用于项目特定的记忆持久化，生命周期与项目绑定。
- */
-export class ProjectStore {
-  private basePath: string;
-  private rootIndex: LocalIndex | null = null;
-
-  /**
-   * @param basePath - 项目记忆目录路径，索引文件将创建在此目录下
-   */
-  constructor(basePath: string) {
-    this.basePath = basePath;
-  }
-
-  /**
-   * 获取（或懒初始化）项目的 vectra 本地索引。
-   * 索引文件存储在 basePath/root.index 中。
-   */
-  async getIndex(): Promise<LocalIndex> {
-    if (!this.rootIndex) {
-      this.rootIndex = await openIndex(path.join(this.basePath, "root.index"));
+    if (filePath.startsWith(this.paths.dailyDir + path.sep)) {
+      return this.paths.dailyIndexPath;
     }
-    return this.rootIndex;
+
+    return this.paths.rootIndexPath;
   }
 
-  /**
-   * 对项目中的单文件切片执行增量 upsert。
-   * 委托给共享的 upsertChunks 逻辑。
-   *
-   * @param filePath - 文件路径
-   * @param chunks   - 该文件最新的切片集合
-   */
+  /** 对单个文件的切片集合执行增量 upsert */
   async upsertFile(filePath: string, chunks: EmbeddedChunk[]): Promise<void> {
-    const index = await this.getIndex();
+    const index = await this.getIndex(this.resolveIndexPath(filePath));
     await upsertChunks(index, filePath, chunks);
   }
 
+  /** 在全局 root 和 daily 两套索引中并行语义搜索，合并后按得分降序取 topK */
+  async searchGlobal(
+    queryVector: number[],
+    topK: number = 20,
+  ): Promise<SearchResult[]> {
+    const [rootIdx, dailyIdx] = await Promise.all([
+      this.getIndex(this.paths.rootIndexPath),
+      this.getIndex(this.paths.dailyIndexPath),
+    ]);
+
+    const [rootResults, dailyResults] = await Promise.all([
+      this.queryIndex(rootIdx, queryVector, topK),
+      this.queryIndex(dailyIdx, queryVector, topK),
+    ]);
+
+    const merged = [...rootResults, ...dailyResults];
+    merged.sort((a, b) => b.score - a.score);
+    return merged.slice(0, topK);
+  }
+
+  /** 在指定项目的索引中执行语义搜索，按得分降序返回 */
+  async searchProject(
+    projectId: string,
+    queryVector: number[],
+    topK: number = 20,
+  ): Promise<SearchResult[]> {
+    validateProjectId(projectId);
+    const indexPath = path.join(this.paths.projectDir(projectId), "root.index");
+    const index = await this.getIndex(indexPath);
+    return this.queryIndex(index, queryVector, topK);
+  }
+
   /**
-   * 在项目索引中执行语义搜索，按得分降序返回。
-   *
-   * @param queryVector - 查询嵌入向量
-   * @param topK        - 返回结果上限
-   * @returns 按相关度降序排列的搜索结果
+   * 清理所有索引（全局 root / daily 以及已有项目索引）中与当前模型或 dtype
+   * 不匹配的 stale 条目，返回受影响需要重建的文件路径列表。
    */
-  async search(queryVector: number[], topK: number): Promise<SearchResult[]> {
-    const index = await this.getIndex();
+  async refreshStaleIndices(): Promise<string[]> {
+    const indexPaths = [
+      this.paths.rootIndexPath,
+      this.paths.dailyIndexPath,
+      ...this.findExistingProjectIndices(),
+    ];
+
+    const staleSets = await Promise.all(
+      indexPaths.map(async (indexPath) => {
+        const index = await this.getIndex(indexPath);
+        return deleteStaleEmbeddings(index);
+      }),
+    );
+
+    const stalePaths = new Set<string>();
+    for (const set of staleSets) {
+      for (const filePath of set) {
+        stalePaths.add(filePath);
+      }
+    }
+    return [...stalePaths];
+  }
+
+  private async queryIndex(
+    index: LocalIndex,
+    queryVector: number[],
+    topK: number,
+  ): Promise<SearchResult[]> {
     const limit = await getQueryLimit(index, topK);
     const items = await index.queryItems(queryVector, "", limit);
     return filterCurrentSearchResults(items as QuerySearchItem[]);
+  }
+
+  /**
+   * 打开（必要时创建）一个 vectra 本地索引。
+   * `vectra` 是 optionalDependency，动态加载以配合 setup 阶段的依赖预检。
+   */
+  private async getIndex(indexPath: string): Promise<LocalIndex> {
+    const cached = this.indices.get(indexPath);
+    if (cached) return cached;
+
+    const { LocalIndex: LocalIndexCtor } = await import("vectra");
+    const index = new LocalIndexCtor(indexPath);
+    if (!(await index.isIndexCreated())) {
+      await index.createIndex();
+    }
+    this.indices.set(indexPath, index);
+    return index;
+  }
+
+  private extractProjectId(filePath: string): string | null {
+    const projectsDir = this.paths.projectsDir;
+    if (!filePath.startsWith(projectsDir + path.sep)) return null;
+
+    const relative = path.relative(projectsDir, filePath);
+    const segments = relative.split(path.sep);
+
+    const dailyIdx = segments.indexOf("daily");
+    if (dailyIdx > 0 && dailyIdx < segments.length - 1) {
+      return segments.slice(0, dailyIdx).join("/");
+    }
+
+    return segments.slice(0, -1).join("/");
+  }
+
+  /** 扫描 projectsDir 下已创建的 root.index 目录（不额外创建空索引） */
+  private findExistingProjectIndices(): string[] {
+    const results: string[] = [];
+    const walk = (dir: string) => {
+      let entries: fs.Dirent[];
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const fullPath = path.join(dir, entry.name);
+        if (entry.name === "root.index") {
+          results.push(fullPath);
+        } else {
+          walk(fullPath);
+        }
+      }
+    };
+    walk(this.paths.projectsDir);
+    return results;
+  }
+}
+
+async function getQueryLimit(index: LocalIndex, topK: number): Promise<number> {
+  if (Number.isFinite(topK)) {
+    return topK;
+  }
+
+  const items = await index.listItems();
+  return Math.max(items.length, 1);
+}
+
+async function deleteStaleEmbeddings(index: LocalIndex): Promise<Set<string>> {
+  const stalePaths = new Set<string>();
+  const items = await index.listItems();
+  for (const item of items) {
+    if (!isCurrentEmbeddingMetadata(item.metadata)) {
+      const filePath = String(item.metadata?.filePath ?? "");
+      if (filePath) stalePaths.add(filePath);
+      await index.deleteItem(String(item.id));
+    }
+  }
+  return stalePaths;
+}
+
+/**
+ * 基于 hash 对索引执行增量 upsert：
+ * 1. 找出需要删除的条目（模型/dtype 已变更或缺少 hash）
+ * 2. 反向比对找出已消失的旧条目
+ * 3. 仅插入 hash 未命中已有索引的新切片
+ */
+async function upsertChunks(
+  index: LocalIndex,
+  filePath: string,
+  chunks: EmbeddedChunk[],
+): Promise<void> {
+  const existing = await index.listItems();
+  const existingByHash = new Map<string, string>();
+  const chunksByHash = new Map(
+    chunks.map((chunk) => [chunk.metadata.hash, chunk]),
+  );
+  const toDelete: string[] = [];
+
+  for (const item of existing) {
+    if (item.metadata && String(item.metadata.filePath) === filePath) {
+      const hash = item.metadata.hash ? String(item.metadata.hash) : null;
+      if (hash) {
+        const chunk = chunksByHash.get(hash);
+        if (
+          chunk &&
+          (String(item.metadata.embeddingModel) !==
+            chunk.metadata.embeddingModel ||
+            String(item.metadata.embeddingDtype) !==
+              chunk.metadata.embeddingDtype)
+        ) {
+          toDelete.push(String(item.id));
+          continue;
+        }
+        existingByHash.set(hash, String(item.id));
+      } else {
+        toDelete.push(String(item.id));
+      }
+    }
+  }
+
+  const newHashes = new Set(chunks.map((c) => c.metadata.hash));
+  for (const [hash, id] of existingByHash) {
+    if (!newHashes.has(hash)) {
+      toDelete.push(id);
+    }
+  }
+
+  for (const id of toDelete) {
+    await index.deleteItem(id);
+  }
+
+  for (const { vector, metadata } of chunks) {
+    if (!existingByHash.has(metadata.hash)) {
+      await index.insertItem({ vector, metadata });
+    }
   }
 }

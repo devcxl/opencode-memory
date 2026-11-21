@@ -422,6 +422,7 @@ test("EMBEDDING_MODEL and EMBEDDING_DTYPE are resolved constants", () => {
 
 import { MemoryPaths } from "../src/memory/MemoryPaths.js";
 import {
+  VectorStore,
   filterCurrentSearchResults,
   isCurrentEmbeddingMetadata,
 } from "../src/search/vector-store.js";
@@ -527,4 +528,22 @@ test("filterCurrentSearchResults removes stale embedding results", () => {
   ]);
 
   expect(results.map((result) => result.text)).toEqual(["current result"]);
+});
+
+test("VectorStore.resolveIndexPath routes global, daily, and project files under its memoryDir", () => {
+  const store = new VectorStore("/custom/mem");
+  expect(store.resolveIndexPath("/custom/mem/MEMORY.md")).toBe(
+    "/custom/mem/root.index",
+  );
+  expect(store.resolveIndexPath("/custom/mem/daily/2026-11-21.md")).toBe(
+    "/custom/mem/daily.index",
+  );
+  expect(
+    store.resolveIndexPath("/custom/mem/projects/owner/repo/MEMORY.md"),
+  ).toBe("/custom/mem/projects/owner/repo/root.index");
+  expect(
+    store.resolveIndexPath(
+      "/custom/mem/projects/owner/repo/daily/2026-11-21.md",
+    ),
+  ).toBe("/custom/mem/projects/owner/repo/root.index");
 });

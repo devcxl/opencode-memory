@@ -23,11 +23,7 @@ import {
   getCurrentModelId,
 } from "../search/embedding.js";
 import { chunkMarkdown } from "../search/chunker.js";
-import {
-  ProjectStore,
-  refreshStaleIndices,
-  upsertFile,
-} from "../search/vector-store.js";
+import { VectorStore } from "../search/vector-store.js";
 import { parseContentByTimestamp } from "../utils/timestampParser.js";
 import { FileSearcher } from "./FileSearcher.js";
 
@@ -35,17 +31,18 @@ import { FileSearcher } from "./FileSearcher.js";
 export class MemoryManager {
   private config: MemoryConfig;
   private paths: MemoryPaths;
-  private projectStores: Map<string, ProjectStore> = new Map();
+  private vectorStore: VectorStore;
   private fileSearcher: FileSearcher;
   private freshIndexDone = false;
 
   constructor(config: MemoryConfig) {
     this.config = config;
     this.paths = new MemoryPaths(config.memoryDir);
+    this.vectorStore = new VectorStore(config.memoryDir);
     this.fileSearcher = new FileSearcher(
       config.memoryDir,
       this.paths.dailyDir,
-      (id) => this.getProjectStore(id),
+      this.vectorStore,
     );
   }
 
@@ -60,7 +57,7 @@ export class MemoryManager {
   }
 
   private async ensureFreshIndex(): Promise<void> {
-    const stalePaths = await refreshStaleIndices();
+    const stalePaths = await this.vectorStore.refreshStaleIndices();
     if (stalePaths.length === 0) return;
 
     for (const filePath of stalePaths) {
@@ -100,21 +97,6 @@ export class MemoryManager {
    */
   getDailyPath(date: string): string {
     return this.paths.dailyPath(date);
-  }
-
-  /**
-   * 获取或创建指定项目的向量存储实例
-   * 使用延迟初始化，只在首次访问时创建 ProjectStore
-   */
-  getProjectStore(projectId: string): ProjectStore {
-    validateProjectId(projectId);
-    if (!this.projectStores.has(projectId)) {
-      this.projectStores.set(
-        projectId,
-        new ProjectStore(this.paths.projectDir(projectId)),
-      );
-    }
-    return this.projectStores.get(projectId)!;
   }
 
   /** 获取项目目录路径 */
@@ -308,22 +290,6 @@ export class MemoryManager {
     return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
   }
 
-  /** 从 projects/ 子目录下的文件路径中提取 projectId */
-  private extractProjectId(filePath: string): string | null {
-    const projectsDir = this.paths.projectsDir;
-    if (!filePath.startsWith(projectsDir + path.sep)) return null;
-
-    const relative = path.relative(projectsDir, filePath);
-    const segments = relative.split(path.sep);
-
-    const dailyIdx = segments.indexOf("daily");
-    if (dailyIdx > 0 && dailyIdx < segments.length - 1) {
-      return segments.slice(0, dailyIdx).join("/");
-    }
-
-    return segments.slice(0, -1).join("/");
-  }
-
   /** 将文件内容分块、向量化并写入向量存储 */
   private async embedAndIndex(
     filePath: string,
@@ -348,13 +314,7 @@ export class MemoryManager {
         },
       }));
 
-      const projectId = this.extractProjectId(filePath);
-      if (projectId) {
-        await this.getProjectStore(projectId).upsertFile(filePath, embedded);
-        return;
-      }
-
-      await upsertFile(filePath, embedded);
+      await this.vectorStore.upsertFile(filePath, embedded);
     } catch (err) {
       const errMsg = (err as Error).message;
       // embedding 引擎未初始化时静默跳过，不阻塞写入操作
@@ -374,19 +334,8 @@ export class MemoryManager {
 
     await this.embedAndIndex(filePath, content);
 
-    const indexPaths: string[] = [];
-    const projectId = this.extractProjectId(filePath);
-    if (projectId) {
-      indexPaths.push(
-        path.join(this.paths.projectsDir, projectId, "root.index"),
-      );
-    } else if (filePath.includes(path.sep + "daily" + path.sep)) {
-      indexPaths.push(this.paths.dailyIndexPath);
-    } else {
-      indexPaths.push(this.paths.rootIndexPath);
-    }
-
-    await gitCommit(operation, filePath, this.config.memoryDir, indexPaths);
+    const indexPath = this.vectorStore.resolveIndexPath(filePath);
+    await gitCommit(operation, filePath, this.config.memoryDir, [indexPath]);
   }
 
   /** 删除文件，忽略文件不存在的错误 */
