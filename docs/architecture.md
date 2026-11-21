@@ -36,31 +36,25 @@ flowchart TB
     end
 
     subgraph Core["3. 核心业务编排层"]
-        MM["memory/MemoryManager.ts<br/>读写 / 追加 / 编辑 / 删除 / 索引编排"]
+        MM["memory/MemoryManager.ts<br/>读写 / 追加 / 编辑 / 删除 / 索引协同"]
         PATHS["memory/MemoryPaths.ts<br/>统一派生全局与项目路径"]
-        STATE["memory/StateChecker.ts<br/>状态机: uninitialized / bootstrapping / ready"]
-        BOOT["memory/BootstrapManager.ts<br/>首次引导模板创建"]
-        SEARCHER["memory/FileSearcher.ts<br/>语义检索 / 关键词检索 / 按月列表"]
+        BOOT["memory/BootstrapManager.ts<br/>状态机 (uninitialized / bootstrapping / ready)<br/>与首次引导模板创建"]
+        SEARCHER["memory/FileSearcher.ts<br/>语义检索 / 按月列表"]
         HANDLERS["handlers/handle{Read,Write,Edit,Delete,Search,List}.ts"]
     end
 
-    subgraph Pipeline["4. 切片、嵌入与向量引擎"]
+    subgraph Pipeline["4. 切片、嵌入、向量与持久化引擎"]
         CHUNKER["search/chunker.ts<br/>按 ##/### 与 &lt;!-- timestamp --&gt; 切片 + SHA256"]
         EMB["search/embedding.ts<br/>@huggingface/transformers ONNX 推理<br/>mean pooling + L2 normalize"]
-        VEC["search/vector-store.ts<br/>vectra LocalIndex 增量 upsert / 查询 / stale 清理"]
+        VEC["search/vector-store.ts (VectorStore)<br/>vectra LocalIndex 增量 upsert / 查询 / stale 清理"]
+        ATOMIC["utils/atomicWrite.ts<br/>tmp + rename 原子落盘"]
+        GIT["utils/git.ts<br/>ensureGitRepo + gitCommit (仅追踪 .md)"]
     end
 
-    subgraph Providers["5. 本地 Provider 与持久化层"]
-        P_FS["LocalFileStorageProvider<br/>atomicWrite (tmp + rename)"]
-        P_EMB["LocalEmbeddingProvider"]
-        P_VEC["LocalVectorIndexProvider<br/>namespace: root / daily / project/{id}"]
-        GIT["utils/git.ts<br/>ensureGitRepo + gitCommit"]
-    end
-
-    subgraph Disk["6. 本地磁盘存储 (~/.config/opencode/memory/)"]
+    subgraph Disk["5. 本地磁盘存储 (~/.config/opencode/memory/)"]
         D_GLOBAL["全局文件<br/>MEMORY.md / IDENTITY.md / USER.md<br/>BOOTSTRAP.md / daily/YYYY-MM-DD.md"]
         D_PROJ["项目隔离目录<br/>projects/&lt;projectId&gt;/MEMORY.md<br/>projects/&lt;projectId&gt;/daily/YYYY-MM-DD.md"]
-        D_IDX["vectra 派生向量索引<br/>root.index / daily.index<br/>projects/&lt;projectId&gt;/root.index"]
+        D_IDX["vectra 派生向量索引 (.gitignore 排除)<br/>root.index / daily.index<br/>projects/&lt;projectId&gt;/root.index"]
         D_GIT[".git/ 自动版本库"]
     end
 
@@ -79,15 +73,10 @@ flowchart TB
     HANDLERS --> MM
     CMD --> BOOT --> MM
 
-    MM --> PATHS & STATE & SEARCHER
-    MM --> P_FS & P_EMB & P_VEC & GIT
-    SEARCHER --> P_FS & EMB & VEC
+    MM --> PATHS & SEARCHER & VEC & ATOMIC & GIT & CHUNKER & EMB
+    SEARCHER --> EMB & VEC
 
-    MM --> CHUNKER
-    P_EMB --> EMB
-    P_VEC --> VEC
-
-    P_FS --> D_GLOBAL & D_PROJ
+    ATOMIC --> D_GLOBAL & D_PROJ
     VEC --> D_IDX
     GIT --> D_GIT
 ```
@@ -193,15 +182,15 @@ sequenceDiagram
     participant HD as handleWrite / Edit / Delete
     participant MM as MemoryManager
     participant CHK as chunkMarkdown
-    participant EMB as LocalEmbeddingProvider
-    participant VEC as LocalVectorIndexProvider (vectra)
-    participant FS as LocalFileStorageProvider
+    participant EMB as search/embedding.ts
+    participant VEC as VectorStore (vectra)
+    participant FS as atomicWrite
     participant GIT as utils/git.ts
     participant HOOK as tool.hook("execute.after")
 
     LLM->>TOOL: 调用 memory(action="write", target, content, scope, mode)
     TOOL->>MM: ensureDirectories()
-    Note over MM: 确保 memory/ 与 daily/ 目录存在；<br/>首次调用时执行 refreshStaleIndices()<br/>清理模型或 dtype 变更导致的失效索引并重建
+    Note over MM: 确保 memory/ 与 daily/ 目录存在；<br/>首次调用时执行 VectorStore.refreshStaleIndices()<br/>清理全局与项目索引中因模型或 dtype 变更失效的条目并重建
     TOOL->>TOOL: validateAction() & projects.resolve(sessionID) & resolveProjectId(scope)
     TOOL->>HD: 分发到对应 Handler (handleWrite / handleEdit / handleDelete)
 
@@ -223,20 +212,20 @@ sequenceDiagram
         Note over MM,VEC: 向量化与增量索引 (embedAndIndex)
         MM->>CHK: chunkMarkdown(newContent, filePath)
         Note over CHK: 按 <!-- timestamp --> 与 ## / ### 标题切块<br/>计算 hash = sha256(filePath:heading:timestamp:text)
-        MM->>EMB: embedTexts(chunks.map(c => c.text))
+        MM->>EMB: Promise.all(chunks.map(c => embedText(c.text)))
         Note over EMB: 懒加载 @huggingface/transformers<br/>mean pooling + L2 normalize → 768 维向量
         EMB-->>MM: vectors[][]
-        MM->>VEC: upsert(embeddedChunks, namespace)
-        Note over VEC: namespace 路由：<br/>projects/ 下 → project/<id> (projects/<id>/root.index)<br/>含 /daily/ → daily (daily.index)<br/>其余 → root (root.index)<br/>三步增量比对：删失效/消失旧项，跳过同 hash 项，插入新项
+        MM->>VEC: vectorStore.upsertFile(filePath, embeddedChunks)
+        Note over VEC: 索引路由 (resolveIndexPath)：<br/>projects/<id> 下 → projects/<id>/root.index<br/>dailyDir 下 → daily.index<br/>其余 → root.index<br/>三步增量比对：删失效/消失旧项，跳过同 hash 项，插入新项
     end
 
-    MM->>GIT: gitCommit(operation, filePath, memoryDir, indexPaths)
-    Note over GIT: ensureGitRepo → git check-ignore 过滤 → git add → git status 检查 → git commit
-    HD-->>TOOL: 返回结果 + [scope: ...] + [REFLECTION TRIGGERED] 反思提示
+    MM->>GIT: gitCommit(operation, filePath, memoryDir)
+    Note over GIT: ensureGitRepo (.gitignore 排除 *.index/) → git add → git status 检查 → git commit
+    HD-->>TOOL: 返回结果 + [scope: ...] + Timestamp
     TOOL-->>LLM: { content }
 
     OC-->>HOOK: 触发 tool.hook("execute.after")
-    HOOK->>HOOK: sessionStates.record(sessionID, { action, target }, completed)
+    HOOK->>HOOK: sessionStates.record(sessionID, { action, target }, completed)<br/>(仅 write / edit / delete 计入 daily 提醒判断)
 ```
 
 #### 存储链路关键机制
@@ -251,7 +240,7 @@ sequenceDiagram
    - L4：默认 `nomic-ai/nomic-embed-text-v1.5`（768 维）
    - 量化精度 `dtype` 按 `options.dtype` → `OPM_EMBEDDING_DTYPE` → 默认 `"fp32"` 解析（支持 `fp32`、`fp16`、`q8`、`q4`、`int8`、`uint8`）。
 5. **嵌入容错**：`embedAndIndex()` 若遇到模型未初始化错误（`"not initialized"`），会静默跳过而不阻塞文件落盘与 Git 提交；向量索引会在后续模型可用时重建。
-6. **Git 自动版本控制**：每次写入/编辑/删除都会调用 `gitCommit()`，将变更的 `.md` 文件及对应的索引文件一并提交到本地 `.git` 仓库。
+6. **Git 自动版本控制**：每次写入/编辑/删除都会调用 `gitCommit()` 提交变更的 `.md` 文件到本地 `.git` 仓库；派生的 `*.index/` 目录通过 `.gitignore` 排除在 Git 追踪外。
 
 ---
 
@@ -291,7 +280,7 @@ sequenceDiagram
         end
 
         CTX->>SESS: needsDailyReminder(event.sessionID)?
-        Note over SESS: 若本会话成功调用过 memory 工具<br/>但从未成功操作过 target="daily"
+        Note over SESS: 若本会话成功调用过写操作 (write/edit/delete)<br/>但从未成功操作过 target="daily"
         SESS-->>CTX: true → 追加 "## Memory Reminder" 提示补写 daily 日志
         CTX-->>OC: event.system.push({ type: "text", text })
     end
@@ -305,11 +294,11 @@ sequenceDiagram
 
         par 并行向量检索
             alt scope !== "project" 或无 projectId
-                FS->>VEC: semanticSearch(queryVector, searchLimit)<br/>同时查询全局 root.index 与 daily.index
+                FS->>VEC: vectorStore.searchGlobal(queryVector, searchLimit)<br/>同时查询全局 root.index 与 daily.index
             end
         and
             alt 存在 projectId 且 scope !== "global"
-                FS->>VEC: ProjectStore(projectId).search(queryVector, searchLimit)<br/>查询 projects/<id>/root.index
+                FS->>VEC: vectorStore.searchProject(projectId, queryVector, searchLimit)<br/>查询 projects/<id>/root.index
             end
         end
 
@@ -341,7 +330,7 @@ sequenceDiagram
 | **`read` / `write` / `edit` / `delete`** | 自动探测 `projectId`；探测到则操作项目目录，否则降级全局        | 同左（若无项目上下文仍降级全局）                             | 强制操作全局根目录文件                | 不适用（等同自动探测）                      |
 | **`search`**                             | 有 `projectId` 时等同 `"all"`，无 `projectId` 时等同 `"global"` | 仅查 `projects/<id>/root.index`（无 `projectId` 时降级全局） | 仅查全局 `root.index` + `daily.index` | 合并检索全局 + 当前项目索引，按得分统一排序 |
 
-### 4.3 初始化状态机（`apps/plugin/src/memory/StateChecker.ts`）
+### 4.3 初始化状态机（`apps/plugin/src/memory/BootstrapManager.ts`）
 
 ```text
 getInitState() 状态判定优先级：
@@ -353,16 +342,15 @@ getInitState() 状态判定优先级：
 
 ### 4.4 代码目录职责速查
 
-| 模块路径                                                   | 核心职责                                                                                        |
-| :--------------------------------------------------------- | :---------------------------------------------------------------------------------------------- |
-| `apps/plugin/src/index.ts`                                 | 插件入口：`Plugin.define`、依赖预检、命令/工具/Hook/事件订阅注册                                |
-| `apps/plugin/src/config/runtime.ts`                        | 解析 `~/.config/opencode/opencode.json`、确定 `memoryDir`、远程配置迁移守卫                     |
-| `apps/plugin/src/config/embedding.ts`                      | 嵌入模型与量化 `dtype` 优先级解析                                                               |
-| `apps/plugin/src/commands/registerMemoryInitCommand.ts`    | 注册 `/memory-init` 命令，触发模板创建与首次引导                                                |
-| `apps/plugin/src/tool/registerMemoryTool.ts` & `schema.ts` | 注册 `memory` 工具（Zod 4 schema）与 6 个 action 的参数分发                                     |
-| `apps/plugin/src/handlers/`                                | `read` / `write` / `edit` / `delete` / `search` / `list` 六个动作处理器                         |
-| `apps/plugin/src/session/`                                 | `SessionProjectResolver`（会话→项目映射缓存）与 `SessionStateStore`（daily 提醒追踪）           |
-| `apps/plugin/src/memory/`                                  | `MemoryManager`、`MemoryPaths`、`StateChecker`、`BootstrapManager`、`FileSearcher`、`templates` |
-| `apps/plugin/src/search/`                                  | `optionalDependencies`、`chunker`、`embedding`、`vector-store`                                  |
-| `apps/plugin/src/providers/local/`                         | 本地文件、嵌入、向量索引三大 Provider 实现（测试可替换 seam）                                   |
-| `apps/plugin/src/utils/`                                   | `atomicWrite`、`git`、`projectDetector`、`timestampParser`、`validation`、`defaultProject`      |
+| 模块路径                                                   | 核心职责                                                                                       |
+| :--------------------------------------------------------- | :--------------------------------------------------------------------------------------------- |
+| `apps/plugin/src/index.ts`                                 | 插件入口：`Plugin.define`、依赖预检、命令/工具/Hook/事件订阅注册                               |
+| `apps/plugin/src/config/runtime.ts`                        | 解析 `~/.config/opencode/opencode.json`、确定 `memoryDir`、远程配置迁移守卫                    |
+| `apps/plugin/src/config/embedding.ts`                      | 嵌入模型与量化 `dtype` 优先级解析                                                              |
+| `apps/plugin/src/commands/registerMemoryInitCommand.ts`    | 注册 `/memory-init` 命令，触发模板创建与首次引导                                               |
+| `apps/plugin/src/tool/registerMemoryTool.ts` & `schema.ts` | 注册 `memory` 工具（Zod 4 schema）与 6 个 action 的参数分发                                    |
+| `apps/plugin/src/handlers/`                                | `read` / `write` / `edit` / `delete` / `search` / `list` 六个动作处理器                        |
+| `apps/plugin/src/session/`                                 | `SessionProjectResolver`（会话→项目映射缓存）与 `SessionStateStore`（写操作与 daily 提醒追踪） |
+| `apps/plugin/src/memory/`                                  | `MemoryManager`、`MemoryPaths`、`BootstrapManager`、`FileSearcher`、`templates`                |
+| `apps/plugin/src/search/`                                  | `optionalDependencies`、`chunker`、`embedding`、`vector-store` (`VectorStore`)                 |
+| `apps/plugin/src/utils/`                                   | `atomicWrite`、`git`、`projectDetector`、`timestampParser`、`validation`、`defaultProject`     |
