@@ -66,7 +66,9 @@ test("context hook splits static instructions, frozen memory context, and dynami
     expect(partsBefore).toHaveLength(2);
     expect(partsBefore[0].text).not.toContain("ordered part content");
     expect(partsBefore[1].text).toContain("# Memory Context");
+    expect(partsBefore[1].text).toContain('<memory-context data-only="true">');
     expect(partsBefore[1].text).toContain("ordered part content");
+    expect(partsBefore[1].text).toContain("</memory-context>");
 
     await harness.triggerToolAfter(
       "memory",
