@@ -151,10 +151,17 @@ export function resolveDtype(
   return "fp32";
 }
 
-// ─── 模块级常量（import-time 解析） ────────────────────────────
+// ─── 运行时动态解析 & 兼容导出 ─────────────────────────────────
 
-export const EMBEDDING_MODEL = resolveModel(
-  getPluginConfigOption,
-  isZhLocale(),
-);
-export const EMBEDDING_DTYPE = resolveDtype(getPluginConfigOption);
+/** 按当前插件配置与环境动态解析嵌入模型 */
+export function getEmbeddingModel(): EmbeddingModelConfig {
+  return resolveModel(getPluginConfigOption, isZhLocale());
+}
+
+/** 按当前插件配置与环境动态解析量化 dtype */
+export function getEmbeddingDtype(): QuantizationDtype {
+  return resolveDtype(getPluginConfigOption);
+}
+
+export const EMBEDDING_MODEL = getEmbeddingModel();
+export const EMBEDDING_DTYPE = getEmbeddingDtype();

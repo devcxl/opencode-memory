@@ -4,8 +4,10 @@ process.env.ORT_LOGGING_LEVEL = "error";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import {
-  EMBEDDING_MODEL as MODEL,
-  EMBEDDING_DTYPE as DTYPE,
+  getEmbeddingModel,
+  getEmbeddingDtype,
+  type EmbeddingModelConfig,
+  type QuantizationDtype,
 } from "../config/embedding.js";
 
 // `@huggingface/transformers` 是 optionalDependency，静态 import 会让整个插件模块在
@@ -37,12 +39,12 @@ function getModelCachePath(): string {
  * - onnx 模型文件存在
  * - 文件大小 > 1MB（排除下载不完整/损坏的模型）
  */
-function isModelCacheValid(): boolean {
+function isModelCacheValid(model: EmbeddingModelConfig): boolean {
   const cachePath = getModelCachePath();
   const modelPath = path.join(
     cachePath,
-    MODEL.org,
-    MODEL.repo,
+    model.org,
+    model.repo,
     "onnx",
     "model.onnx",
   );
@@ -60,10 +62,10 @@ function isModelCacheValid(): boolean {
 }
 
 /** 清空模型缓存子目录，用于强制重新下载 */
-function clearModelCache(): void {
+function clearModelCache(model: EmbeddingModelConfig): void {
   try {
     const cachePath = getModelCachePath();
-    const modelPath = path.join(cachePath, MODEL.org, MODEL.repo);
+    const modelPath = path.join(cachePath, model.org, model.repo);
 
     if (fs.existsSync(modelPath)) {
       fs.rmSync(modelPath, { recursive: true, force: true });
@@ -75,28 +77,34 @@ function clearModelCache(): void {
 
 let embedder: any = null;
 let initPromise: Promise<void> | null = null;
+let activeModel: EmbeddingModelConfig | null = null;
+let activeDtype: QuantizationDtype | null = null;
 
 /**
  * 初始化嵌入模型 pipeline。
  * 使用 Promise 锁实现单例模式，确保并发调用只加载一次模型。
- * 首次加载前检查缓存有效性，若模型文件损坏则自动清缓存重试（最多 2 次）。
+ * 首次加载前按最新配置动态解析模型与 dtype；若模型文件损坏则清缓存重试（最多 2 次）。
  */
 export async function initEmbedder(): Promise<void> {
   if (!initPromise) {
     initPromise = (async () => {
+      const model = getEmbeddingModel();
+      const dtype = getEmbeddingDtype();
       let retries = 0;
       const maxRetries = 2;
 
       while (retries <= maxRetries) {
         try {
-          if (!isModelCacheValid()) {
-            clearModelCache();
+          if (!isModelCacheValid(model)) {
+            clearModelCache(model);
           }
 
           const { pipeline } = await loadTransformers();
-          embedder = await pipeline("feature-extraction", MODEL.modelId, {
-            dtype: DTYPE,
+          embedder = await pipeline("feature-extraction", model.modelId, {
+            dtype,
           });
+          activeModel = model;
+          activeDtype = dtype;
           return;
         } catch (err) {
           const errMsg = (err as Error).message;
@@ -105,7 +113,7 @@ export async function initEmbedder(): Promise<void> {
             errMsg.includes("Protobuf parsing failed") ||
             errMsg.includes("corrupt")
           ) {
-            clearModelCache();
+            clearModelCache(model);
             retries++;
             if (retries > maxRetries) {
               throw new Error(
@@ -149,15 +157,15 @@ export async function embedText(text: string): Promise<number[]> {
 
 /** 获取当前模型的向量维度 */
 export function getEmbeddingDimensions(): number {
-  return MODEL.dimensions;
+  return (activeModel ?? getEmbeddingModel()).dimensions;
 }
 
 /** 获取当前模型 ID（用于日志/调试） */
 export function getCurrentModelId(): string {
-  return MODEL.modelId;
+  return (activeModel ?? getEmbeddingModel()).modelId;
 }
 
 /** 获取当前模型 dtype（用于索引失效判断） */
 export function getCurrentDtype(): string {
-  return DTYPE;
+  return activeDtype ?? getEmbeddingDtype();
 }

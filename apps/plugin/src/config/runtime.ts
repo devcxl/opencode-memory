@@ -3,14 +3,110 @@ import * as path from "node:path";
 import * as fs from "node:fs";
 
 /**
- * 解析 opencode.json 配置（兼容 JSONC trailing comma）。
- * 先用正则移除 trailing comma，再用标准 JSON.parse。
- * opencode 自身使用 JSONC 解析器，但插件侧无此依赖，此处做最小兼容。
+ * 将 JSONC 字符串剥离单行/多行注释与尾部逗号（`,]`、`,}`），
+ * 全程尊重双引号字符串字面量，不误伤 `"https://..."` 或字符串内的 `,}`。
+ */
+function stripJsoncCommentsAndTrailingCommas(raw: string): string {
+  // Pass 1: 剥离字符串字面量之外的 // 与 /* */ 注释
+  let withoutComments = "";
+  let inString = false;
+  let escaped = false;
+
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i];
+    const next = raw[i + 1];
+
+    if (inString) {
+      withoutComments += ch;
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\") {
+        escaped = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = true;
+      withoutComments += ch;
+      continue;
+    }
+
+    if (ch === "/" && next === "/") {
+      i += 2;
+      while (i < raw.length && raw[i] !== "\n" && raw[i] !== "\r") {
+        i++;
+      }
+      if (i < raw.length) {
+        withoutComments += raw[i];
+      }
+      continue;
+    }
+
+    if (ch === "/" && next === "*") {
+      i += 2;
+      while (i < raw.length && !(raw[i] === "*" && raw[i + 1] === "/")) {
+        if (raw[i] === "\n") {
+          withoutComments += "\n";
+        }
+        i++;
+      }
+      i++; // 跳过 '/'
+      continue;
+    }
+
+    withoutComments += ch;
+  }
+
+  // Pass 2: 剥离字符串字面量之外的 trailing comma
+  let result = "";
+  inString = false;
+  escaped = false;
+
+  for (let i = 0; i < withoutComments.length; i++) {
+    const ch = withoutComments[i];
+
+    if (inString) {
+      result += ch;
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\") {
+        escaped = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = true;
+      result += ch;
+      continue;
+    }
+
+    if (ch === ",") {
+      let j = i + 1;
+      while (j < withoutComments.length && /\s/.test(withoutComments[j])) {
+        j++;
+      }
+      if (withoutComments[j] === "}" || withoutComments[j] === "]") {
+        continue;
+      }
+    }
+
+    result += ch;
+  }
+
+  return result;
+}
+
+/**
+ * 解析 opencode.json 配置（兼容 JSONC 注释与 trailing comma）。
  */
 function parseConfigFile(raw: string): unknown {
-  // 移除 trailing comma: ,] → ]  ,} → }
-  const cleaned = raw.replace(/,(\s*[}\]])/g, "$1");
-  return JSON.parse(cleaned);
+  return JSON.parse(stripJsoncCommentsAndTrailingCommas(raw));
 }
 
 /** 内存插件运行时配置 */
@@ -100,13 +196,28 @@ function findPluginOptions(
 export function getPluginConfigObject(): Record<string, unknown> | undefined {
   const configPath = getOpencodeConfigPath();
 
+  let raw: string;
   try {
-    const raw = fs.readFileSync(configPath, "utf-8");
+    raw = fs.readFileSync(configPath, "utf-8");
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException)?.code;
+    if (code !== "ENOENT") {
+      console.warn(
+        `[opencode-memory] Failed to read ${configPath}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    return undefined;
+  }
+
+  try {
     const cfg = parseConfigFile(raw) as Record<string, unknown>;
     return findPluginOptions(cfg);
-  } catch {}
-
-  return undefined;
+  } catch (error) {
+    console.warn(
+      `[opencode-memory] Failed to parse ${configPath}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return undefined;
+  }
 }
 
 /**
