@@ -1,8 +1,6 @@
 import * as path from "node:path";
 import * as fs from "node:fs";
 import type {
-  SearchResult,
-  ListResult,
   ContextFile,
   SemanticSearchResult,
   MonthGroup,
@@ -334,8 +332,8 @@ export class MemoryManager {
 
     await this.embedAndIndex(filePath, content);
 
-    const indexPath = this.vectorStore.resolveIndexPath(filePath);
-    await gitCommit(operation, filePath, this.config.memoryDir, [indexPath]);
+    // 向量索引为可重建的派生数据，仅追踪 Markdown 源文件
+    await gitCommit(operation, filePath, this.config.memoryDir);
   }
 
   /** 删除文件，忽略文件不存在的错误 */
@@ -376,14 +374,6 @@ export class MemoryManager {
     return files;
   }
 
-  /** 委托给 FileSearcher：关键词搜索 */
-  async searchFiles(
-    query: string,
-    maxResults: number,
-  ): Promise<SearchResult[]> {
-    return this.fileSearcher.searchFiles(query, maxResults);
-  }
-
   /** 委托给 FileSearcher：语义搜索 */
   async semanticSearch(
     query: string,
@@ -399,11 +389,6 @@ export class MemoryManager {
       projectId,
       scope,
     );
-  }
-
-  /** 委托给 FileSearcher：列出所有文件 */
-  listFiles(): ListResult {
-    return this.fileSearcher.listFiles();
   }
 
   /** 委托给 FileSearcher：按月份分组列出文件 */

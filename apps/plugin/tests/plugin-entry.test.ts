@@ -68,6 +68,25 @@ test("execute.after records memory calls and triggers daily reminder", async () 
   });
 });
 
+test("execute.after does not trigger daily reminder for read-only memory actions", async () => {
+  await withTempHome(async () => {
+    const harness = await createV2Harness(MemoryPlugin, { options: {} });
+
+    await harness.triggerToolAfter("memory", {
+      action: "read",
+      target: "memory",
+    });
+    await harness.triggerToolAfter("memory", {
+      action: "search",
+    });
+
+    const system = await harness.buildSystem();
+    expect(system).not.toContain("Memory Reminder");
+
+    await harness.cleanup();
+  });
+});
+
 test("/memory-init creates templates when memory is uninitialized", async () => {
   await withTempHome(async (memoryDir) => {
     const harness = await createV2Harness(MemoryPlugin, { options: {} });

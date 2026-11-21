@@ -45,16 +45,21 @@ export class SessionStateStore {
 
   /**
    * 记录一次 memory 工具调用。
-   * 只有成功完成的调用才计入，避免失败操作触发 daily 提醒。
+   * 只有成功完成的写操作（write/edit/delete）才计入，避免只读检索或失败操作触发 daily 提醒。
    */
   record(sessionID: string, info: MemoryCallInfo, completed: boolean): void {
     if (!completed) return;
+
+    const action = info.action ?? "unknown";
+    if (action !== "write" && action !== "edit" && action !== "delete") {
+      return;
+    }
 
     const state = this.get(sessionID);
     const timestamp = new Date().toISOString();
 
     state.memoryOperations.push({
-      action: info.action ?? "unknown",
+      action,
       target: info.target ?? "unknown",
       timestamp,
     });

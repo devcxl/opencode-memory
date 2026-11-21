@@ -58,17 +58,7 @@ export async function handleWrite(
       ? `[scope: project/${project}]`
       : `[scope: global]`;
 
-    const reflectionPrompt = [
-      "",
-      "[REFLECTION TRIGGERED]",
-      `After writing to ${displayName}, ask yourself:`,
-      "1. Why was this update important?",
-      "2. What pattern does this reveal about the user or project?",
-      "3. Should this trigger additional memory updates (cross-referencing)?",
-      "4. How does this connect to previous memories?",
-    ].join("\n");
-
-    const result = `${scopeTag} ${mode === "overwrite" ? "Wrote to" : "Appended to"} ${displayName}.${reflectionPrompt}`;
+    const result = `${scopeTag} ${mode === "overwrite" ? "Wrote to" : "Appended to"} ${displayName}.`;
     return `${result}\n\nTimestamp: ${memoryManager.getLocalTimestamp()}`;
   } catch (error) {
     return toErrorMessage(error, `Unknown target: ${target}`);

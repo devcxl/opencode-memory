@@ -34,6 +34,11 @@ export async function ensureGitRepo(
     await $`git config user.email "memory@opencode.local"`
       .cwd(memoryDir)
       .quiet();
+
+    const gitignorePath = path.join(memoryDir, ".gitignore");
+    if (!fs.existsSync(gitignorePath)) {
+      fs.writeFileSync(gitignorePath, "*.index/\n", "utf-8");
+    }
   } catch (err) {
     console.error(`[git] Failed to initialize repo: ${(err as Error).message}`);
   }
