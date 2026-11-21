@@ -120,14 +120,14 @@ OpenCode V1 的配置键是 `plugin`，并且应使用 V1 线：
 
 **操作:**
 
-| 操作     | 描述                 | 参数                                                                   |
-| -------- | -------------------- | ---------------------------------------------------------------------- |
-| `read`   | 读取记忆文件         | `target`: memory, identity, user, daily; `date`, `scope`（可选）       |
-| `write`  | 写入记忆文件         | `target`, `content`, `mode`: append/overwrite; `date`, `scope`（可选） |
-| `edit`   | 编辑文件中的指定内容 | `target`, `oldString`, `newString`; `date`, `scope`（可选）            |
-| `delete` | 按时间戳删除条目     | `target`, `timestamp`; `date`, `scope`（可选）                         |
-| `search` | 语义搜索记忆文件     | `query`, `max_results`, `period`, `scope`（可选）                      |
-| `list`   | 列出记忆文件         | `period`（可选）                                                       |
+| 操作     | 描述                    | 参数                                                                                 |
+| -------- | ----------------------- | ------------------------------------------------------------------------------------ |
+| `read`   | 读取记忆文件            | `target`: memory, identity, user, daily; `date`, `scope`（可选）                     |
+| `write`  | 写入记忆文件            | `target`, `content`, `mode`, `date`, `scope`, `replace_timestamps`, `origin`（可选） |
+| `edit`   | 编辑文件中的指定内容    | `target`, `oldString`, `newString`; `date`, `scope`（可选）                          |
+| `delete` | 按时间戳删除条目        | `target`, `timestamp`; `date`, `scope`（可选）                                       |
+| `search` | 混合检索（向量 + BM25） | `query`, `max_results`, `period`, `scope`（可选）                                    |
+| `list`   | 列出记忆文件            | `period`, `scope`（可选）                                                            |
 
 **示例:**
 
@@ -160,13 +160,11 @@ memory --action write --target memory --scope project --content "Use port 5432"
 `/memory-init` 在 OpenCode V2 中常驻注册，任何时候执行都安全：记忆系统已完全初始化时它会立即返回，
 既不创建也不覆盖模板。
 
-## 上下文注入
+## 上下文注入与生命周期
 
-MEMORY.md、IDENTITY.md 和 USER.md 会在**每次模型请求前**注入 system prompt，并且每次都从磁盘重建
-（目前没有上下文缓存）。每日日志需通过 `memory` 工具访问。
+`MEMORY.md`、`IDENTITY.md` 和 `USER.md`（以及当前项目的 `MEMORY.md`，自动剔除 `origin: external` 条目）会拆分为有序 `SystemPart` 注入 system prompt，并通过**会话级冻结快照**保持前缀字节稳定以提升 KV Cache 命中率；仅当本会话修改了注入文件或发生上下文压缩时才失效重建（写入 `daily` 不失效缓存）。每日日志需通过 `memory` 工具主动读取或搜索。
 
-某个会话执行过 `memory` 操作但没有写每日日志时，下一次模型请求会带上 `Memory Reminder` 系统段落，
-替代 V1 的 TUI toast 提醒。
+当会话执行过写记忆操作但未更新每日日志时，下一次模型请求末尾会附带独立的 `Memory Reminder` 系统段落。上下文压缩前插件会自动将高价值工程决策沉淀到当日 `daily/`（可通过 `options.compactionFlush: false` 关闭），也可以随时运行 `/memory-consolidate [global] [days]` 将近期日志按字符预算蒸馏归并到 `MEMORY.md`。
 
 ## 仓库结构
 

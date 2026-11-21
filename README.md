@@ -128,14 +128,14 @@ Defaults: `nomic-embed-text-v1.5`, `fp32`, except that a Chinese system locale s
 
 **Actions:**
 
-| Action   | Description                  | Parameters                                                                |
-| -------- | ---------------------------- | ------------------------------------------------------------------------- |
-| `read`   | Read memory file             | `target`: memory, identity, user, daily; `date`, `scope` (optional)       |
-| `write`  | Write to memory file         | `target`, `content`, `mode`: append/overwrite; `date`, `scope` (optional) |
-| `edit`   | Edit specific part of file   | `target`, `oldString`, `newString`; `date`, `scope` (optional)            |
-| `delete` | Delete entry by timestamp    | `target`, `timestamp`; `date`, `scope` (optional)                         |
-| `search` | Semantic search memory files | `query`, `max_results`, `period`, `scope` (optional)                      |
-| `list`   | List memory files            | `period` (optional)                                                       |
+| Action   | Description                   | Parameters                                                                              |
+| -------- | ----------------------------- | --------------------------------------------------------------------------------------- |
+| `read`   | Read memory file              | `target`: memory, identity, user, daily; `date`, `scope` (optional)                     |
+| `write`  | Write to memory file          | `target`, `content`, `mode`, `date`, `scope`, `replace_timestamps`, `origin` (optional) |
+| `edit`   | Edit specific part of file    | `target`, `oldString`, `newString`; `date`, `scope` (optional)                          |
+| `delete` | Delete entry by timestamp     | `target`, `timestamp`; `date`, `scope` (optional)                                       |
+| `search` | Hybrid search (vector + BM25) | `query`, `max_results`, `period`, `scope` (optional)                                    |
+| `list`   | List memory files             | `period`, `scope` (optional)                                                            |
 
 **Examples:**
 
@@ -169,14 +169,11 @@ memory --action write --target memory --scope project --content "Use port 5432"
 `/memory-init` stays registered in OpenCode V2 and is always safe to run: once memory is
 fully initialized it returns immediately without creating or overwriting templates.
 
-## Context Injection
+## Context Injection & Lifecycle
 
-MEMORY.md, IDENTITY.md, and USER.md are injected into the system prompt **before each model
-request**, rebuilt from disk every time (there is no context cache yet). Daily logs must be
-accessed via the `memory` tool.
+`MEMORY.md`, `IDENTITY.md`, and `USER.md` (plus the current project's `MEMORY.md`, excluding `origin: external` entries) are injected into the system prompt as ordered `SystemPart` blocks with a **per-session frozen snapshot** to preserve KV cache stability. The snapshot only invalidates when the session modifies an injected memory file or triggers compaction (writing `daily` logs preserves the cache). Daily logs must be accessed via the `memory` tool.
 
-When a session performs `memory` operations without writing the daily log, the next model
-request carries a `Memory Reminder` system section instead of the V1 TUI toast.
+When a session performs memory writes without updating the daily log, the next model request carries a trailing `Memory Reminder` system section. Before context compaction, the plugin automatically flushes high-signal engineering decisions to `daily/YYYY-MM-DD.md` (disable via `options.compactionFlush: false`), and `/memory-consolidate [global] [days]` lets you distill recent daily logs into `MEMORY.md` within character budgets.
 
 ## Repository Structure
 

@@ -24,30 +24,34 @@ flowchart TB
     subgraph Entry["1. 插件接入与配置层"]
         INDEX["apps/plugin/src/index.ts<br/>createMemoryPlugin()"]
         OPTDEP["search/optionalDependencies.ts<br/>vectra & transformers 预检"]
-        CFG["config/runtime.ts + embedding.ts<br/>读取 ~/.config/opencode/opencode.json<br/>解析 memoryDir / embeddingModel / dtype"]
-        CMD["commands/registerMemoryInitCommand.ts<br/>注册 /memory-init"]
-        TOOL["tool/registerMemoryTool.ts + schema.ts<br/>注册 memory 工具 (6 个 action)"]
+        CFG["config/runtime.ts + embedding.ts<br/>JSONC 解析 ~/.config/opencode/opencode.json<br/>解析 memoryDir / limits / compactionFlush / embedding"]
+        CMD["commands/registerMemoryInitCommand.ts<br/>commands/registerMemoryConsolidateCommand.ts<br/>注册 /memory-init 与 /memory-consolidate"]
+        HOOK_CMP["hooks/registerCompactionFlush.ts<br/>compaction 钩子自动沉淀 daily"]
+        TOOL["tool/registerMemoryTool.ts + schema.ts<br/>注册 memory 工具 (6 个 action + replace_timestamps/origin)"]
     end
 
     subgraph Session["2. 会话隔离与作用域层"]
         RESOLVER["session/SessionProjectResolver.ts<br/>按 sessionID 缓存 projectId"]
         DETECTOR["utils/projectDetector.ts<br/>三级项目探测: remote → repoRoot → dir+hash"]
-        SESS_STORE["session/SessionStateStore.ts<br/>按 sessionID 记录工具调用与 daily 提醒状态"]
+        CTX_CACHE["session/SessionContextCache.ts<br/>会话级冻结记忆快照 + 精准失效"]
+        SESS_STORE["session/SessionStateStore.ts<br/>按 sessionID 记录写状态、daily 提醒与压缩去重"]
     end
 
     subgraph Core["3. 核心业务编排层"]
-        MM["memory/MemoryManager.ts<br/>读写 / 追加 / 编辑 / 删除 / 索引协同"]
+        MM["memory/MemoryManager.ts<br/>文件锁读写 / 预算校验 / 增量索引 / git 协同"]
         PATHS["memory/MemoryPaths.ts<br/>统一派生全局与项目路径"]
         BOOT["memory/BootstrapManager.ts<br/>状态机 (uninitialized / bootstrapping / ready)<br/>与首次引导模板创建"]
-        SEARCHER["memory/FileSearcher.ts<br/>语义检索 / 按月列表"]
+        SEARCHER["memory/FileSearcher.ts<br/>Hybrid 混合检索 (向量+BM25+衰减+MMR) / 作用域 list"]
         HANDLERS["handlers/handle{Read,Write,Edit,Delete,Search,List}.ts"]
     end
 
     subgraph Pipeline["4. 切片、嵌入、向量与持久化引擎"]
-        CHUNKER["search/chunker.ts<br/>按 ##/### 与 &lt;!-- timestamp --&gt; 切片 + SHA256"]
-        EMB["search/embedding.ts<br/>@huggingface/transformers ONNX 推理<br/>mean pooling + L2 normalize"]
-        VEC["search/vector-store.ts (VectorStore)<br/>vectra LocalIndex 增量 upsert / 查询 / stale 清理"]
-        ATOMIC["utils/atomicWrite.ts<br/>tmp + rename 原子落盘"]
+        CHUNKER["search/chunker.ts<br/>标题/时间戳/origin 切片 + 上下文面包屑 + 1200 字符重叠切分"]
+        EMB["search/embedding.ts<br/>@huggingface/transformers ONNX 动态模型解析与推理"]
+        BM25["search/bm25.ts<br/>纯 TS BM25 词法打分 + 30d 半衰期衰减 + MMR 去重"]
+        VEC["search/vector-store.ts (VectorStore)<br/>vectra LocalIndex 索引锁 / Hash 预检 / 增量 upsert / stale 清理"]
+        MUTEX["utils/asyncMutex.ts<br/>KeyedAsyncMutex 文件/索引/Git 互斥锁"]
+        ATOMIC["utils/atomicWrite.ts<br/>pid+UUID tmp + rename 原子落盘"]
         GIT["utils/git.ts<br/>ensureGitRepo + gitCommit (仅追踪 .md)"]
     end
 
@@ -62,8 +66,10 @@ flowchart TB
     INDEX --> OPTDEP
     INDEX --> CFG
     INDEX --> CMD
+    INDEX --> HOOK_CMP
     INDEX --> TOOL
     INDEX --> RESOLVER
+    INDEX --> CTX_CACHE
     INDEX --> SESS_STORE
     INDEX <--> OC_CMD & OC_TOOL & OC_SESS & OC_EVT
 
@@ -71,10 +77,11 @@ flowchart TB
     TOOL --> RESOLVER
     TOOL --> HANDLERS
     HANDLERS --> MM
-    CMD --> BOOT --> MM
+    HOOK_CMP --> MM & RESOLVER & CTX_CACHE
+    CMD --> BOOT & MM & RESOLVER & CTX_CACHE
 
-    MM --> PATHS & SEARCHER & VEC & ATOMIC & GIT & CHUNKER & EMB
-    SEARCHER --> EMB & VEC
+    MM --> PATHS & SEARCHER & VEC & ATOMIC & GIT & CHUNKER & EMB & MUTEX
+    SEARCHER --> EMB & VEC & BM25 & CHUNKER
 
     ATOMIC --> D_GLOBAL & D_PROJ
     VEC --> D_IDX
@@ -93,9 +100,9 @@ flowchart TB
 ```text
 ~/.config/opencode/memory/
 ├── .git/                         # 插件自动 git init 并提交每次变更
-├── MEMORY.md                     # 全局长期记忆（上限 1000 行）
-├── IDENTITY.md                   # AI 身份设定（人格、语言、行为规则）
-├── USER.md                       # 用户画像（技术栈、偏好、称呼等）
+├── MEMORY.md                     # 全局长期记忆（默认 6,000 chars / 1,000 行上限）
+├── IDENTITY.md                   # AI 身份设定（默认 2,500 chars 上限）
+├── USER.md                       # 用户画像（默认 2,500 chars 上限）
 ├── BOOTSTRAP.md                  # 仅首次引导时存在，初始化完成后由 AI 删除
 ├── daily/
 │   └── YYYY-MM-DD.md             # 全局每日任务日志
@@ -103,7 +110,7 @@ flowchart TB
 ├── daily.index/                  # vectra 索引：全局 daily/*.md
 └── projects/
     └── <projectId>/              # 如 devcxl/opencode-memory 或 myproj.a1b2c3d4
-        ├── MEMORY.md             # 项目级长期记忆（上限 1000 行）
+        ├── MEMORY.md             # 项目级长期记忆（默认 6,000 chars / 1,000 行上限）
         ├── daily/
         │   └── YYYY-MM-DD.md     # 项目级每日日志
         └── root.index/           # vectra 索引：该项目下的 MEMORY 与 daily
@@ -230,16 +237,16 @@ sequenceDiagram
 
 #### 存储链路关键机制
 
-1. **原子写入**：`atomicWrite()` 先写 `${filePath}.tmp.${Date.now()}`，再通过 `fs.renameSync()` 替换目标文件，防止异常中断导致 Markdown 损坏。
-2. **Markdown 语义切片**：`chunkMarkdown()` 维护 `heading`（`##` / `###`）、`timestamp`（`<!-- YYYY-MM-DD HH:MM:SS -->`）与 `buffer` 状态，每遇到时间戳或标题就刷新为一个独立 `Chunk`，并计算 `sha256(filePath:heading:timestamp:text)` 用于增量去重。
-3. **增量向量更新**：`upsertChunks()` 在 Vectra 索引中比对已有条目的 `hash` 与 `embeddingModel` / `embeddingDtype`，仅删除已失效或已移除的切片、跳过未变化的切片、插入新增切片。
-4. **嵌入模型解析优先级**（`apps/plugin/src/config/embedding.ts`）：
-   - L1：`~/.config/opencode/opencode.json` 中的插件 `options.embeddingModel`
+1. **进程内并发互斥锁与原子写入**：`KeyedAsyncMutex` 按文件路径、索引目录与 Git 仓库加锁串行化读-改-写；`atomicWrite()` 使用 `${filePath}.tmp.${process.pid}.${crypto.randomUUID()}` 临时文件后 `fs.renameSync()` 原子替换，异常时自动清理临时文件。
+2. **字符预算与单次原子腾挪**：全局/项目 `MEMORY.md` 默认 `6,000` 字符（另保留 `1,000` 行兜底），`USER.md` / `IDENTITY.md` 默认 `2,500` 字符（均可通过 `options.limits` 覆盖）；写入响应附带 `Budget: x/y chars (z%)` 提示，并支持 `replace_timestamps` 在单次锁内先删旧再追加。
+3. **Markdown 语义切片与增量向量化**：`chunkMarkdown()` 按 `##` / `###` 与 `<!-- timestamp | origin: ... -->` 切块，为超长段落（> `1,200` 字符）做 `150` 字符重叠切分，并在嵌入输入中注入 `[file > heading]` 上下文；`embedAndIndex()` 先经 `VectorStore.getExistingChunkHashes()` 比对 Hash，仅对新增/变更切片调用 `embedText()`。
+4. **Provenance 来源隔离**：写入支持 `origin: owner | agent | external`（缺省视为 `agent`）。`external` 禁止直接写入 curated 记忆文件；`getContextFiles()` 自动剔除带 `origin: external` 的块，阻断外部网页摘录回流进系统上下文。
+5. **嵌入模型解析优先级**（`apps/plugin/src/config/embedding.ts`）：
+   - L1：`~/.config/opencode/opencode.json`（完整支持 JSONC `//`、`/* */` 注释与 trailing comma）中的 `options.embeddingModel`
    - L2：系统 locale 检测（`LANG` / `LC_ALL` / `LC_CTYPE` 以 `zh` 开头 → `Xenova/jina-embeddings-v2-base-zh`，768 维）
    - L3：环境变量 `OPM_EMBEDDING_MODEL`
    - L4：默认 `nomic-ai/nomic-embed-text-v1.5`（768 维）
-   - 量化精度 `dtype` 按 `options.dtype` → `OPM_EMBEDDING_DTYPE` → 默认 `"fp32"` 解析（支持 `fp32`、`fp16`、`q8`、`q4`、`int8`、`uint8`）。
-5. **嵌入容错**：`embedAndIndex()` 若遇到模型未初始化错误（`"not initialized"`），会静默跳过而不阻塞文件落盘与 Git 提交；向量索引会在后续模型可用时重建。
+   - 量化精度 `dtype` 按 `options.dtype` → `OPM_EMBEDDING_DTYPE` → 默认 `"fp32"` 在运行时动态解析。
 6. **Git 自动版本控制**：每次写入/编辑/删除都会调用 `gitCommit()` 提交变更的 `.md` 文件到本地 `.git` 仓库；派生的 `*.index/` 目录通过 `.gitignore` 排除在 Git 追踪外。
 
 ---
@@ -317,11 +324,12 @@ sequenceDiagram
 
 ## 4. 关键行为规则与设计边界
 
-### 4.1 自动注入 vs 主动召回的边界
+### 4.1 自动注入 vs 主动召回与生命周期边界
 
-- **每次请求自动注入**：全局 `MEMORY.md`、`IDENTITY.md`、`USER.md`，以及当前会话对应的 `projects/<projectId>/MEMORY.md`。
-- **不会自动注入**：`daily/YYYY-MM-DD.md` 与 `projects/<projectId>/daily/YYYY-MM-DD.md` 不会自动进入 system prompt，必须由模型在需要时通过 `memory(action="read", target="daily")` 或 `memory(action="search")` 主动读取/搜索。
-- **无上下文缓存**：`session.hook("context")` 每次模型请求都会从磁盘重新读取记忆文件并拼接；`memory-awareness.md` 保持纯静态文本以保护模型侧 KV Cache 命中率。
+- **SystemPart 分层与会话冻结快照**：`ctx.session.hook("context")` 将输出拆为有序 `SystemPart`——Part 1 为纯静态 `memory-awareness.md`（或引导态 `BOOTSTRAP_INSTRUCTIONS`）；Part 2 为 `SessionContextCache` 按 `sessionID` 冻结的 `# Memory Context`（含全局 `MEMORY.md`、`IDENTITY.md`、`USER.md` 及项目 `projects/<projectId>/MEMORY.md`，自动剔除 `origin: external` 条目）；Part 3 为按需追加的 `## Memory Reminder`。
+- **精准缓存失效**：同一会话连续请求直接复用冻结快照保住 KV Cache；仅当本会话成功修改了注入目标（`memory` / `identity` / `user` / `bootstrap`）、触发 `compaction` 或执行 `/memory-init` / `/memory-consolidate` 时失效；**写 `daily` 不失效快照**。
+- **混合检索与分层衰减**：`memory(action="search")` 采用 `0.70 * vector + 0.30 * BM25` 混合打分，先按 `minScore = 0.15` 过滤，再对 `daily/YYYY-MM-DD.md` 施加 30 天半衰期衰减（`MEMORY.md`/`USER.md`/`IDENTITY.md` 永不衰减），最后经 MMR（`lambda = 0.7`）去重。
+- **Compaction 兜底与按需蒸馏**：长会话触发 `compaction` 前由 `registerCompactionFlush` 自动抽取未落盘结论追加至当日 `daily/`；开发者可通过 `/memory-consolidate [global] [days]` 主动将近期非 `external` 的 `daily/` 内容归纳至 `MEMORY.md`。
 
 ### 4.2 `scope` 参数在各动作中的解析规则
 
