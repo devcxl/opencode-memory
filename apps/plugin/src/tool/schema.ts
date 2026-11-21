@@ -59,6 +59,12 @@ export const MemoryToolInput = z.object({
     .describe(
       "Optional list of timestamps (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS) to atomically remove before appending new content in a write action.",
     ),
+  origin: z
+    .enum(["owner", "agent", "external"])
+    .optional()
+    .describe(
+      "Provenance of the memory entry: 'owner' (user-stated), 'agent' (default), or 'external' (web/search excerpts; blocked from curated memory auto-injection).",
+    ),
   period: z
     .string()
     .optional()

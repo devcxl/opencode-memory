@@ -2,8 +2,10 @@ import * as path from "node:path";
 import * as fs from "node:fs";
 import type {
   ContextFile,
-  SemanticSearchResult,
+  MemoryOrigin,
   MonthGroup,
+  SearchScope,
+  SemanticSearchResult,
 } from "../types.js";
 import type { MemoryConfig, MemoryLimits } from "../config/runtime.js";
 import { DEFAULT_MEMORY_LIMITS } from "../config/runtime.js";
@@ -27,7 +29,11 @@ import {
 } from "../search/embedding.js";
 import { chunkMarkdown } from "../search/chunker.js";
 import { VectorStore } from "../search/vector-store.js";
-import { parseContentByTimestamp } from "../utils/timestampParser.js";
+import {
+  formatTimestampComment,
+  parseContentByTimestamp,
+  stripExternalOriginEntries,
+} from "../utils/timestampParser.js";
 import { FileSearcher } from "./FileSearcher.js";
 
 /** 内存系统的核心管理器，统一管理文件读写、向量索引、语义搜索与 git 提交 */
@@ -296,7 +302,10 @@ export class MemoryManager {
       }
 
       const newContent = filteredEntries
-        .map((e) => `<!-- ${e.timestamp} -->\n${e.content}`)
+        .map(
+          (e) =>
+            `${formatTimestampComment(e.timestamp, e.origin)}\n${e.content}`,
+        )
         .join("\n\n");
 
       await this.persistAndIndex(
@@ -324,7 +333,7 @@ export class MemoryManager {
   async appendFile(
     filePath: string,
     content: string,
-    options?: { replaceTimestamps?: string[] },
+    options?: { replaceTimestamps?: string[]; origin?: MemoryOrigin },
   ): Promise<string | null> {
     if (options?.replaceTimestamps) {
       for (const ts of options.replaceTimestamps) {
@@ -348,12 +357,15 @@ export class MemoryManager {
           );
         }
         baseContent = remaining
-          .map((e) => `<!-- ${e.timestamp} -->\n${e.content}`)
+          .map(
+            (e) =>
+              `${formatTimestampComment(e.timestamp, e.origin)}\n${e.content}`,
+          )
           .join("\n\n");
       }
 
       const timestamp = this.getLocalTimestamp();
-      const stamped = `<!-- ${timestamp} -->\n${content}`;
+      const stamped = `${formatTimestampComment(timestamp, options?.origin)}\n${content}`;
       const separator = baseContent.trim() ? "\n\n" : "";
       const newContent = baseContent + separator + stamped;
 
@@ -386,7 +398,7 @@ export class MemoryManager {
     return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
   }
 
-  /** 将文件内容分块、向量化并写入向量存储 */
+  /** 将文件内容分块、先比对 Hash 再增量向量化并写入向量存储 */
   private async embedAndIndex(
     filePath: string,
     content: string,
@@ -396,8 +408,21 @@ export class MemoryManager {
       const embeddingModel = getCurrentModelId();
       const embeddingDtype = getCurrentDtype();
 
-      const vectors = await Promise.all(chunks.map((c) => embedText(c.text)));
-      const embedded = chunks.map((chunk, idx) => ({
+      const existingHashes =
+        await this.vectorStore.getExistingChunkHashes(filePath);
+      const chunkHashSet = new Set(chunks.map((c) => c.hash));
+      const preservedHashes = new Set<string>();
+      for (const hash of existingHashes) {
+        if (chunkHashSet.has(hash)) {
+          preservedHashes.add(hash);
+        }
+      }
+
+      const chunksToEmbed = chunks.filter((c) => !preservedHashes.has(c.hash));
+      const vectors = await Promise.all(
+        chunksToEmbed.map((c) => embedText(c.embeddingText ?? c.text)),
+      );
+      const embedded = chunksToEmbed.map((chunk, idx) => ({
         vector: vectors[idx],
         metadata: {
           filePath,
@@ -410,7 +435,13 @@ export class MemoryManager {
         },
       }));
 
-      await this.vectorStore.upsertFile(filePath, embedded);
+      if (embedded.length > 0 || preservedHashes.size !== existingHashes.size) {
+        await this.vectorStore.upsertFile(
+          filePath,
+          embedded,
+          preservedHashes.size > 0 ? preservedHashes : undefined,
+        );
+      }
     } catch (err) {
       const errMsg = (err as Error).message;
       // embedding 引擎未初始化时静默跳过，不阻塞写入操作
@@ -458,7 +489,10 @@ export class MemoryManager {
       const { filePath } = this.getPathForTarget(target, undefined, project);
       const content = readFileSafe(filePath);
       if (content?.trim()) {
-        files.push({ name, content: content.trim() });
+        const sanitized = stripExternalOriginEntries(content);
+        if (sanitized) {
+          files.push({ name, content: sanitized });
+        }
       }
     };
 
@@ -489,18 +523,28 @@ export class MemoryManager {
     );
   }
 
-  /** 委托给 FileSearcher：按月份分组列出文件 */
-  async listFilesGroupedByMonth(): Promise<{
+  /** 委托给 FileSearcher：按月份分组列出文件（支持项目作用域） */
+  async listFilesGroupedByMonth(
+    projectId?: string | null,
+    scope: SearchScope = "all",
+  ): Promise<{
     root: Array<{ name: string; timestamps: string[] }>;
     monthly: MonthGroup[];
+    project?: {
+      projectId: string;
+      root: Array<{ name: string; timestamps: string[] }>;
+      monthly: MonthGroup[];
+    };
   }> {
-    return this.fileSearcher.listFilesGroupedByMonth();
+    return this.fileSearcher.listFilesGroupedByMonth(projectId, scope);
   }
 
-  /** 委托给 FileSearcher：按时间段筛选文件 */
+  /** 委托给 FileSearcher：按时间段筛选文件（支持项目作用域） */
   async listFilesByPeriod(
     period: string,
+    projectId?: string | null,
+    scope: SearchScope = "all",
   ): Promise<Array<{ name: string; timestamps: string[] }>> {
-    return this.fileSearcher.listFilesByPeriod(period);
+    return this.fileSearcher.listFilesByPeriod(period, projectId, scope);
   }
 }

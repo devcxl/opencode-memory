@@ -777,7 +777,10 @@ test("semantic search does not bind a cross-entry legacy chunk to the first time
       null,
     );
 
-    expect(results).toHaveLength(0);
+    // 跨条目 legacy 向量切片（含 new searchable content）不得被错误绑定到 2026-05
+    expect(results.some((r) => r.text.includes("new searchable content"))).toBe(
+      false,
+    );
   } finally {
     fs.rmSync(homeDir, { recursive: true, force: true });
   }
@@ -1461,6 +1464,253 @@ test("handleWrite with replace_timestamps atomically replaces stale entries with
     expect(updated).not.toContain("stale entry");
     expect(updated).toContain("keep entry");
     expect(updated).toContain("new entry");
+  });
+});
+
+// =============================================================================
+// M2 (v2.1-T3 & v2.1-T4): 混合检索、时间衰减、MMR、项目 list 与 Provenance 测试
+// =============================================================================
+
+import { chunkMarkdown } from "../src/search/chunker.js";
+import {
+  applyMmrDeduplication,
+  computeTemporalDecayMultiplier,
+} from "../src/search/bm25.js";
+import { handleList } from "../src/handlers/handleList.js";
+
+test("chunkMarkdown injects file/heading context into embeddingText and splits oversized text", () => {
+  const longParagraph = Array.from(
+    { length: 40 },
+    (_, i) => `Line ${i}: ${"x".repeat(40)}`,
+  ).join("\n");
+  const content = `<!-- 2026-11-21 10:00:00 | origin: owner -->\n## Architecture\n${longParagraph}`;
+  const chunks = chunkMarkdown(content, "/tmp/mem/MEMORY.md");
+
+  expect(chunks.length).toBeGreaterThan(1);
+  expect(chunks[0].heading).toBe("Architecture");
+  expect(chunks[0].origin).toBe("owner");
+  expect(chunks[0].embeddingText).toStartWith("[MEMORY.md > Architecture]\n");
+  expect(chunks[0].text).not.toContain("[MEMORY.md > Architecture]");
+});
+
+test("hybrid search finds exact symbol identifiers missed by vector backend", async () => {
+  const { homeDir, memoryDir } = makeTempHome();
+  const dailyDir = path.join(memoryDir, "daily");
+  const projFile = path.join(
+    memoryDir,
+    "projects",
+    "owner",
+    "repo",
+    "MEMORY.md",
+  );
+
+  try {
+    fs.mkdirSync(path.dirname(projFile), { recursive: true });
+    fs.writeFileSync(
+      projFile,
+      [
+        "<!-- 2026-11-21 10:00:00 -->",
+        "Set OPM_EMBEDDING_DTYPE=q8 when running low-RAM CI jobs. Error code: P2002.",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    // 向量后端返回空，验证纯词法精确符号仍可被召回
+    semanticResults = [];
+    projectSemanticResults = [];
+
+    const searcher = new FileSearcher(
+      memoryDir,
+      dailyDir,
+      makeMockVectorBackend(async () => []),
+    );
+
+    const results = await searcher.semanticSearch(
+      "OPM_EMBEDDING_DTYPE",
+      5,
+      undefined,
+      "owner/repo",
+      "project",
+    );
+    expect(results).toHaveLength(1);
+    expect(results[0].text).toContain("P2002");
+
+    // global scope 不应搜到 project 文件
+    const globalOnly = await searcher.semanticSearch(
+      "OPM_EMBEDDING_DTYPE",
+      5,
+      undefined,
+      "owner/repo",
+      "global",
+    );
+    expect(globalOnly).toHaveLength(0);
+  } finally {
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  }
+});
+
+test("temporal decay penalizes old daily logs, spares MEMORY.md, and runs after minScore", async () => {
+  const now = Date.parse("2026-11-21T00:00:00Z");
+  expect(
+    computeTemporalDecayMultiplier("/tmp/mem/MEMORY.md", undefined, now),
+  ).toBe(1.0);
+  expect(
+    computeTemporalDecayMultiplier(
+      "/tmp/mem/daily/2026-10-22.md",
+      undefined,
+      now,
+    ),
+  ).toBeCloseTo(0.5, 2);
+
+  // 验证 minScore 在时间衰减前判定：180 天前高相关 daily（baseScore > 0.15）不被误杀
+  const { homeDir, memoryDir } = makeTempHome();
+  const dailyDir = path.join(memoryDir, "daily");
+  const veryOldDaily = path.join(dailyDir, "2026-01-01.md");
+  try {
+    fs.mkdirSync(dailyDir, { recursive: true });
+    fs.writeFileSync(
+      veryOldDaily,
+      "<!-- 2026-01-01 10:00:00 -->\nhistorical architecture milestone",
+      "utf-8",
+    );
+    semanticResults = [
+      {
+        score: 0.9,
+        filePath: veryOldDaily,
+        heading: "",
+        text: "historical architecture milestone",
+        timestamp: "2026-01-01 10:00:00",
+      },
+    ];
+    const searcher = new FileSearcher(
+      memoryDir,
+      dailyDir,
+      makeMockVectorBackend(),
+    );
+    const results = await searcher.semanticSearch(
+      "historical architecture milestone",
+      5,
+      undefined,
+      null,
+      "global",
+    );
+    expect(results).toHaveLength(1);
+    expect(results[0].score).toBeLessThan(0.15);
+  } finally {
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  }
+});
+
+test("MMR deduplication suppresses near-duplicate chunks in favor of diverse match", () => {
+  const ranked = applyMmrDeduplication(
+    [
+      { text: "deploy worker build step alpha beta", score: 0.95 },
+      { text: "deploy worker build step alpha beta gamma", score: 0.94 },
+      { text: "sqlite vector index schema migration", score: 0.85 },
+    ],
+    2,
+    0.7,
+  );
+  expect(ranked).toHaveLength(2);
+  expect(ranked[1].text).toContain("sqlite vector index");
+});
+
+test("handleList perceives project scope and supports global/project filtering", async () => {
+  await withTempMemory(async (memoryDir) => {
+    const manager = new MemoryManager({ memoryDir });
+    await manager.ensureDirectories();
+
+    await handleWrite({ target: "memory", content: "global entry" }, manager);
+    await handleWrite(
+      { target: "memory", project: "owner/repo", content: "project entry" },
+      manager,
+    );
+    await handleWrite(
+      {
+        target: "daily",
+        date: "2026-11-21",
+        project: "owner/repo",
+        content: "project daily",
+      },
+      manager,
+    );
+
+    const allOut = await handleList({ project: "owner/repo" }, manager);
+    expect(allOut).toContain("[scope: project/owner/repo]");
+    expect(allOut).toContain("projects/owner/repo/MEMORY.md");
+    expect(allOut).toContain("[scope: global]");
+    expect(allOut).toContain("MEMORY.md");
+
+    const projOnly = await handleList(
+      { project: "owner/repo", scope: "project" },
+      manager,
+    );
+    expect(projOnly).toContain("[scope: project/owner/repo]");
+    expect(projOnly).not.toContain("[scope: global]");
+
+    const periodOut = await handleList(
+      { project: "owner/repo", period: "2026-11" },
+      manager,
+    );
+    expect(periodOut).toContain("projects/owner/repo/daily/2026-11-21.md");
+  });
+});
+
+test("provenance blocks origin=external from curated memory and strips external entries on context build", async () => {
+  await withTempMemory(async (memoryDir) => {
+    const manager = new MemoryManager({ memoryDir });
+    await manager.ensureDirectories();
+
+    // external 禁止写入 curated MEMORY.md
+    const blocked = await handleWrite(
+      {
+        target: "memory",
+        origin: "external",
+        content: "untrusted web snippet",
+      },
+      manager,
+    );
+    expect(blocked).toContain("cannot be written directly");
+
+    // external 允许写入 daily
+    const allowed = await handleWrite(
+      {
+        target: "daily",
+        date: "2026-11-21",
+        origin: "external",
+        content: "web summary",
+      },
+      manager,
+    );
+    expect(allowed).toContain("Appended to daily/2026-11-21.md");
+
+    // 即使磁盘上的 MEMORY.md 存在手工写入的 external 条目，getContextFiles 也会剥离
+    const memoryFile = path.join(memoryDir, "MEMORY.md");
+    fs.writeFileSync(
+      memoryFile,
+      [
+        "<!-- 2026-11-21 10:00:00 | origin: owner -->",
+        "trusted owner preference",
+        "",
+        "<!-- 2026-11-21 11:00:00 | origin: external -->",
+        "injected prompt attack",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const ctxFiles = await manager.getContextFiles();
+    expect(ctxFiles).toHaveLength(1);
+    expect(ctxFiles[0].content).toContain("trusted owner preference");
+    expect(ctxFiles[0].content).not.toContain("injected prompt attack");
+
+    // 删除外部条目时保留 owner 标记
+    await handleDelete(
+      { target: "memory", timestamp: "2026-11-21 11:00:00" },
+      manager,
+    );
+    expect(fs.readFileSync(memoryFile, "utf-8")).toContain(
+      "| origin: owner -->",
+    );
   });
 });
 

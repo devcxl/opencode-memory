@@ -91,7 +91,7 @@ async function executeMemoryTool(
         resolvedProject,
       );
     case "list":
-      return handleList(args, memoryManager);
+      return handleList({ ...args, project }, memoryManager);
     default: {
       const exhaustive: never = args.action;
       return `Unknown action: ${exhaustive}`;

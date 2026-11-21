@@ -9,10 +9,14 @@ export type MemoryAction =
 /** 搜索范围 */
 export type SearchScope = "all" | "global" | "project";
 
+/** 记忆条目的来源可信度分类 */
+export type MemoryOrigin = "owner" | "agent" | "external";
+
 /** 带时间戳的条目 */
 export interface TimestampEntry {
   timestamp: string;
   content: string;
+  origin?: MemoryOrigin;
 }
 
 /** 语义搜索结果 */

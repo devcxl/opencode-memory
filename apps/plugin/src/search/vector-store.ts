@@ -107,12 +107,43 @@ export class VectorStore {
     return this.paths.rootIndexPath;
   }
 
+  /**
+   * 获取指定文件当前索引中且匹配当前模型/dtype 的已有切片 Hash 集合，
+   * 供写入管线跳过无变更切片的重复 Embedding。
+   */
+  async getExistingChunkHashes(filePath: string): Promise<Set<string>> {
+    const indexPath = this.resolveIndexPath(filePath);
+    return this.indexLocks.withLock(indexPath, async () => {
+      const index = await this.getIndex(indexPath);
+      const items = await index.listItems();
+      const resolvedTarget = path.resolve(filePath);
+      const hashes = new Set<string>();
+
+      for (const item of items) {
+        if (
+          item.metadata &&
+          path.resolve(String(item.metadata.filePath)) === resolvedTarget &&
+          isCurrentEmbeddingMetadata(item.metadata) &&
+          item.metadata.hash
+        ) {
+          hashes.add(String(item.metadata.hash));
+        }
+      }
+
+      return hashes;
+    });
+  }
+
   /** 对单个文件的切片集合执行增量 upsert（按索引目录串行加锁） */
-  async upsertFile(filePath: string, chunks: EmbeddedChunk[]): Promise<void> {
+  async upsertFile(
+    filePath: string,
+    chunks: EmbeddedChunk[],
+    preservedHashes?: Set<string>,
+  ): Promise<void> {
     const indexPath = this.resolveIndexPath(filePath);
     await this.indexLocks.withLock(indexPath, async () => {
       const index = await this.getIndex(indexPath);
-      await upsertChunks(index, filePath, chunks);
+      await upsertChunks(index, filePath, chunks, preservedHashes);
     });
   }
 
@@ -276,6 +307,7 @@ async function upsertChunks(
   index: LocalIndex,
   filePath: string,
   chunks: EmbeddedChunk[],
+  preservedHashes?: Set<string>,
 ): Promise<void> {
   const existing = await index.listItems();
   const existingByHash = new Map<string, string>();
@@ -312,7 +344,7 @@ async function upsertChunks(
 
   const newHashes = new Set(chunks.map((c) => c.metadata.hash));
   for (const [hash, id] of existingByHash) {
-    if (!newHashes.has(hash)) {
+    if (!newHashes.has(hash) && !preservedHashes?.has(hash)) {
       toDelete.push(id);
     }
   }

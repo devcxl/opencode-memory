@@ -648,6 +648,23 @@ test("VectorStore.refreshStaleIndices cleans stale project embeddings strictly i
         path.join(customMemDir, "projects", "owner", "repo", "root.index"),
       ),
     ).toBe(true);
+
+    // 验证 getExistingChunkHashes 返回当前模型已索引的 hash，支持增量跳过重复嵌入
+    await store.upsertFile(projFile, [
+      {
+        vector: [1, 0, 0],
+        metadata: {
+          filePath: projFile,
+          heading: "",
+          text: "project knowledge",
+          hash: "hash-keep-1",
+          embeddingModel: getCurrentModelId(),
+          embeddingDtype: getCurrentDtype(),
+        },
+      },
+    ]);
+    const hashes = await store.getExistingChunkHashes(projFile);
+    expect(hashes.has("hash-keep-1")).toBe(true);
   } finally {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   }
