@@ -10,6 +10,17 @@ export interface V2HarnessOptions {
   projectDirectory?: string;
   /** 插件 options */
   options?: Record<string, unknown>;
+  /** 模拟 ctx.experimental.generate.text */
+  generateText?: (
+    input: { prompt: string; model?: unknown },
+    requestOptions?: { signal?: AbortSignal },
+  ) => Promise<{ text: string }>;
+  /** 捕获 ctx.session.prompt 调用 */
+  onSessionPrompt?: (input: {
+    sessionID: string;
+    text: string;
+    delivery?: string;
+  }) => void;
 }
 
 export interface V2Harness {
@@ -25,7 +36,10 @@ export interface V2Harness {
     sessionID?: string,
   ): Promise<Array<{ type: "text"; text: string }>>;
   /** 触发 compaction hook */
-  triggerCompaction(sessionID?: string): Promise<void>;
+  triggerCompaction(
+    sessionID?: string,
+    messages?: Array<{ role: string; content: unknown }>,
+  ): Promise<{ system: Array<{ type: "text"; text: string }> }>;
   /** 推送一条订阅事件（如 session.deleted） */
   emitEvent(event: {
     type: string;
@@ -33,6 +47,8 @@ export interface V2Harness {
   }): Promise<void>;
   /** 执行已注册的 memory-init 命令 */
   runMemoryInit(sessionID?: string, text?: string): Promise<void>;
+  /** 执行任意已注册的命令 */
+  runCommand(name: string, sessionID?: string, text?: string): Promise<void>;
   /** 触发 tool.execute.after */
   triggerToolAfter(
     tool: string,
@@ -93,13 +109,28 @@ export async function createV2Harness(
       remove: async () => {},
       scan: async () => ({ entries: [] }),
     },
+    experimental: {
+      generate: {
+        text:
+          options.generateText ??
+          (async () => ({
+            text: "NO_MEMORY",
+          })),
+      },
+    },
     session: {
       get: async () => ({
         location: { directory: projectDirectory },
         subpath: undefined,
         projectID: "test-project",
       }),
-      prompt: async () => {},
+      prompt: async (input: {
+        sessionID: string;
+        text: string;
+        delivery?: string;
+      }) => {
+        options.onSessionPrompt?.(input);
+      },
       hook: async (name: string, callback: (event: any) => unknown) => {
         sessionHooks[name] = callback;
         return { dispose: async () => {} };
@@ -204,18 +235,20 @@ export async function createV2Harness(
       return event.system;
     },
 
-    async triggerCompaction(sessionID = "test-session") {
+    async triggerCompaction(sessionID = "test-session", messages = []) {
       const hook = sessionHooks.compaction;
       if (!hook) throw new Error("compaction hook was not registered");
-      await hook({
+      const event = {
         sessionID,
         agent: "build",
         model: { providerID: "test", id: "test-model" },
-        system: [],
-        messages: [],
+        system: [] as Array<{ type: "text"; text: string }>,
+        messages,
         options: {},
         tools: {},
-      });
+      };
+      await hook(event);
+      return { system: event.system };
     },
 
     async emitEvent(event) {
@@ -227,10 +260,14 @@ export async function createV2Harness(
     },
 
     async runMemoryInit(sessionID = "test-session", text = "") {
+      await this.runCommand("memory-init", sessionID, text);
+    },
+
+    async runCommand(name: string, sessionID = "test-session", text = "") {
       const command = commandDefs.find(
-        (definition) => definition.name === "memory-init",
+        (definition) => definition.name === name,
       );
-      if (!command) throw new Error("memory-init command was not registered");
+      if (!command) throw new Error(`${name} command was not registered`);
       await command.execute({
         sessionID,
         prompt: { text },

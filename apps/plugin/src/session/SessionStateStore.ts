@@ -8,6 +8,8 @@ export interface SessionState {
   }>;
   /** 最近一次 daily 更新的 ISO 时间戳，null 表示未更新过 */
   lastDailyUpdate: string | null;
+  /** 最近一次完成 compaction flush 的消息快照指纹，避免同一轮压缩重复抽取 */
+  lastCompactionFlushSignature?: string;
 }
 
 /** memory 工具中用于提醒判断的字段 */
@@ -83,6 +85,18 @@ export class SessionStateStore {
     const state = this.states.get(sessionID);
     if (!state) return false;
     return state.memoryOperations.length > 0 && !state.lastDailyUpdate;
+  }
+
+  /** 检查当前压缩周期指纹是否已执行过 compaction flush */
+  hasCompactionFlushed(sessionID: string, signature: string): boolean {
+    return (
+      this.states.get(sessionID)?.lastCompactionFlushSignature === signature
+    );
+  }
+
+  /** 记录本压缩周期已执行 compaction flush */
+  markCompactionFlushed(sessionID: string, signature: string): void {
+    this.get(sessionID).lastCompactionFlushSignature = signature;
   }
 
   /** 插件卸载时清理全部状态 */

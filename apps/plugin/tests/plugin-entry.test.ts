@@ -259,3 +259,154 @@ test("setup rejects OPM_MODE=remote", async () => {
     else process.env.OPM_MODE = previousMode;
   }
 });
+
+// ─── M3 (v2.1-T5 & v2.1-T6): Compaction Flush 与 /memory-consolidate ───
+
+test("compaction flush persists extracted decisions to daily log once per cycle", async () => {
+  await withTempHome(async (memoryDir) => {
+    let generateCalls = 0;
+    const harness = await createV2Harness(MemoryPlugin, {
+      options: {},
+      generateText: async () => {
+        generateCalls++;
+        return {
+          text: "- Decided to use hybrid search (0.7 vector / 0.3 BM25) for code recall",
+        };
+      },
+    });
+
+    const longMessages = [
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "Let us decide the search ranking strategy for opencode-memory so symbol queries and semantic queries both rank reliably.",
+          },
+        ],
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "We agreed on 0.7 vector + 0.3 BM25 with 30-day decay applied only to daily logs and minScore checked before decay.",
+          },
+        ],
+      },
+    ];
+
+    const first = await harness.triggerCompaction("s-compact", longMessages);
+    expect(generateCalls).toBe(1);
+    expect(
+      first.system.some((p) => p.text.includes("persisted to daily")),
+    ).toBe(true);
+
+    const today = new Date().toISOString().slice(0, 10);
+    const candidates = [
+      path.join(memoryDir, "daily", `${today}.md`),
+      ...(() => {
+        const found: string[] = [];
+        const walk = (dir: string) => {
+          if (!fs.existsSync(dir)) return;
+          for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+            const full = path.join(dir, entry.name);
+            if (entry.isDirectory()) walk(full);
+            else if (entry.name === `${today}.md`) found.push(full);
+          }
+        };
+        walk(path.join(memoryDir, "projects"));
+        return found;
+      })(),
+    ];
+    const dailyPath = candidates.find((p) => fs.existsSync(p));
+    expect(dailyPath).toBeDefined();
+    const content = fs.readFileSync(dailyPath!, "utf-8");
+    expect(content).toContain("## Compaction Flush");
+    expect(content).toContain("0.7 vector / 0.3 BM25");
+
+    // 同一消息快照重试 compaction 不重复抽取
+    await harness.triggerCompaction("s-compact", longMessages);
+    expect(generateCalls).toBe(1);
+
+    await harness.cleanup();
+  });
+});
+
+test("compaction flush errors never block compaction", async () => {
+  await withTempHome(async () => {
+    const harness = await createV2Harness(MemoryPlugin, {
+      options: {},
+      generateText: async () => {
+        throw new Error("provider overloaded");
+      },
+    });
+
+    const longMessages = [
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "A sufficiently long engineering conversation discussing architecture decisions and trade-offs in detail.",
+          },
+        ],
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "Confirmed architecture trade-offs and documented deployment checklist for production rollout.",
+          },
+        ],
+      },
+    ];
+
+    await expect(
+      harness.triggerCompaction("s-fail", longMessages),
+    ).resolves.toBeDefined();
+
+    await harness.cleanup();
+  });
+});
+
+test("/memory-consolidate gathers non-external recent daily logs and prompts with budget info", async () => {
+  await withTempHome(async (memoryDir) => {
+    const today = new Date().toISOString().slice(0, 10);
+    const dailyDir = path.join(memoryDir, "daily");
+    fs.mkdirSync(dailyDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(memoryDir, "MEMORY.md"),
+      "<!-- 2026-11-20 10:00:00 -->\nExisting curated fact",
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(dailyDir, `${today}.md`),
+      [
+        "<!-- 2026-11-21 10:00:00 | origin: agent -->",
+        "Adopted KeyedAsyncMutex for file locking",
+        "",
+        "<!-- 2026-11-21 11:00:00 | origin: external -->",
+        "Untrusted third-party snippet that must not be promoted",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const prompts: Array<{ sessionID: string; text: string }> = [];
+    const harness = await createV2Harness(MemoryPlugin, {
+      options: {},
+      onSessionPrompt: (input) => prompts.push(input),
+    });
+
+    expect(harness.commandNames()).toContain("memory-consolidate");
+    await harness.runCommand("memory-consolidate", "s-cons", "global 7");
+
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0].text).toContain("Current budget usage:");
+    expect(prompts[0].text).toContain("Adopted KeyedAsyncMutex");
+    expect(prompts[0].text).not.toContain("Untrusted third-party snippet");
+
+    await harness.cleanup();
+  });
+});

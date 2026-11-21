@@ -13,6 +13,8 @@ import {
 } from "./instructions/memoryInstructions.js";
 import { registerMemoryTool } from "./tool/registerMemoryTool.js";
 import { registerMemoryInitCommand } from "./commands/registerMemoryInitCommand.js";
+import { registerMemoryConsolidateCommand } from "./commands/registerMemoryConsolidateCommand.js";
+import { registerCompactionFlush } from "./hooks/registerCompactionFlush.js";
 import { SessionProjectResolver } from "./session/SessionProjectResolver.js";
 import {
   SessionContextCache,
@@ -85,10 +87,16 @@ export function createMemoryPlugin(
           ? BOOTSTRAP_INSTRUCTIONS
           : getMemoryAwarenessInstructions();
 
-      // 1. 命令：/memory-init
+      // 1. 命令：/memory-init 与 /memory-consolidate
       await registerMemoryInitCommand(ctx, {
         bootstrapManager,
         onInitialized: () => contextCache.invalidateAll(),
+      });
+      await registerMemoryConsolidateCommand(ctx, {
+        memoryManager,
+        projects,
+        contextCache,
+        limits: config.limits,
       });
 
       // 2. 工具：memory
@@ -105,9 +113,13 @@ export function createMemoryPlugin(
         }
       });
 
-      // 4. 压缩发生时使对应会话快照失效，保证压缩后重新同步磁盘记忆
-      await ctx.session.hook("compaction", (event) => {
-        contextCache.invalidate(event.sessionID);
+      // 4. 压缩前自动沉淀到 daily 并使对应会话快照失效
+      await registerCompactionFlush(ctx, {
+        memoryManager,
+        projects,
+        sessionStates,
+        contextCache,
+        enabled: config.compactionFlush !== false,
       });
 
       // 5. 模型请求前：按静态指令 / 冻结记忆快照 / 动态提醒拆分为独立 SystemPart

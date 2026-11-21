@@ -128,6 +128,7 @@ export const DEFAULT_MEMORY_LIMITS: MemoryLimits = {
 export interface MemoryConfig {
   memoryDir: string;
   limits?: MemoryLimits;
+  compactionFlush?: boolean;
 }
 
 /**
@@ -298,9 +299,16 @@ export function loadConfig(overrides?: Record<string, unknown>): MemoryConfig {
   assertLocalOnly(pluginOpts);
 
   const limits = parseMemoryLimits(pluginOpts.limits);
-  return limits
-    ? { memoryDir: getMemoryDir(), limits }
-    : { memoryDir: getMemoryDir() };
+  const compactionFlush =
+    typeof pluginOpts.compactionFlush === "boolean"
+      ? pluginOpts.compactionFlush
+      : undefined;
+
+  return {
+    memoryDir: getMemoryDir(),
+    ...(limits ? { limits } : {}),
+    ...(compactionFlush !== undefined ? { compactionFlush } : {}),
+  };
 }
 
 /** 获取 opencode 配置文件路径 */
