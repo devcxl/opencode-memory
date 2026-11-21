@@ -109,9 +109,25 @@ function parseConfigFile(raw: string): unknown {
   return JSON.parse(stripJsoncCommentsAndTrailingCommas(raw));
 }
 
+/** 各常驻记忆文件的字符上限配置 */
+export interface MemoryLimits {
+  memory: number;
+  projectMemory: number;
+  user: number;
+  identity: number;
+}
+
+export const DEFAULT_MEMORY_LIMITS: MemoryLimits = {
+  memory: 6000,
+  projectMemory: 6000,
+  user: 2500,
+  identity: 2500,
+};
+
 /** 内存插件运行时配置 */
 export interface MemoryConfig {
   memoryDir: string;
+  limits?: MemoryLimits;
 }
 
 /**
@@ -236,6 +252,37 @@ function assertLocalOnly(pluginOpts: Record<string, unknown>): void {
   }
 }
 
+function parsePositiveInt(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  const rounded = Math.floor(value);
+  return rounded > 0 ? rounded : undefined;
+}
+
+function parseMemoryLimits(raw: unknown): MemoryLimits | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const obj = raw as Record<string, unknown>;
+  const memory = parsePositiveInt(obj.memory);
+  const projectMemory = parsePositiveInt(obj.projectMemory);
+  const user = parsePositiveInt(obj.user);
+  const identity = parsePositiveInt(obj.identity);
+
+  if (
+    memory === undefined &&
+    projectMemory === undefined &&
+    user === undefined &&
+    identity === undefined
+  ) {
+    return undefined;
+  }
+
+  return {
+    memory: memory ?? DEFAULT_MEMORY_LIMITS.memory,
+    projectMemory: projectMemory ?? DEFAULT_MEMORY_LIMITS.projectMemory,
+    user: user ?? DEFAULT_MEMORY_LIMITS.user,
+    identity: identity ?? DEFAULT_MEMORY_LIMITS.identity,
+  };
+}
+
 /**
  * 生成运行时配置对象。
  *
@@ -250,7 +297,10 @@ export function loadConfig(overrides?: Record<string, unknown>): MemoryConfig {
 
   assertLocalOnly(pluginOpts);
 
-  return { memoryDir: getMemoryDir() };
+  const limits = parseMemoryLimits(pluginOpts.limits);
+  return limits
+    ? { memoryDir: getMemoryDir(), limits }
+    : { memoryDir: getMemoryDir() };
 }
 
 /** 获取 opencode 配置文件路径 */

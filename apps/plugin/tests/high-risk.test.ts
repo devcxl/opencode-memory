@@ -1360,6 +1360,111 @@ test("concurrent appendFile calls on the same file do not lose updates", async (
 });
 
 // =============================================================================
+// M1 (v2.1-T2): 字符预算、占用率反馈与原子腾挪测试
+// =============================================================================
+
+test("handleWrite reports Budget usage for budgeted files and omits it for daily", async () => {
+  await withTempMemory(async (memoryDir) => {
+    const manager = new MemoryManager({
+      memoryDir,
+      limits: { memory: 100, projectMemory: 100, user: 80, identity: 80 },
+    });
+    await manager.ensureDirectories();
+
+    const memRes = await handleWrite(
+      { target: "memory", content: "concise rule" },
+      manager,
+    );
+    expect(memRes).toContain("Budget:");
+    expect(memRes).toContain("/100 chars");
+
+    const dailyRes = await handleWrite(
+      { target: "daily", date: "2026-11-21", content: "daily log" },
+      manager,
+    );
+    expect(dailyRes).not.toContain("Budget:");
+  });
+});
+
+test("handleWrite warns when >= 85% budget and rejects over-budget with entry timestamps", async () => {
+  await withTempMemory(async (memoryDir) => {
+    const manager = new MemoryManager({
+      memoryDir,
+      limits: { memory: 120, projectMemory: 120, user: 100, identity: 100 },
+    });
+    await manager.ensureDirectories();
+
+    const memoryFile = path.join(memoryDir, "MEMORY.md");
+    fs.writeFileSync(
+      memoryFile,
+      "<!-- 2026-11-01 10:00:00 -->\n" + "a".repeat(45),
+      "utf-8",
+    );
+
+    const overRes = await handleWrite(
+      { target: "memory", content: "b".repeat(50) },
+      manager,
+    );
+    expect(overRes).toContain("exceeds character budget");
+    expect(overRes).toContain("2026-11-01 10:00:00");
+
+    // 写入后接近 85%（约 109/120 ≈ 91%）应触发预警但允许落盘
+    const nearRes = await handleWrite(
+      { target: "memory", content: "c".repeat(4), mode: "append" },
+      manager,
+    );
+    expect(nearRes).toContain("near limit");
+  });
+});
+
+test("handleWrite with replace_timestamps atomically replaces stale entries within budget", async () => {
+  await withTempMemory(async (memoryDir) => {
+    const manager = new MemoryManager({
+      memoryDir,
+      limits: { memory: 120, projectMemory: 120, user: 100, identity: 100 },
+    });
+    await manager.ensureDirectories();
+
+    const memoryFile = path.join(memoryDir, "MEMORY.md");
+    fs.writeFileSync(
+      memoryFile,
+      [
+        "<!-- 2026-11-01 09:00:00 -->",
+        "stale entry " + "x".repeat(60),
+        "",
+        "<!-- 2026-11-02 09:00:00 -->",
+        "keep entry",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    // 直接追加会被预算拒绝
+    const directRes = await handleWrite(
+      { target: "memory", content: "new entry " + "y".repeat(30) },
+      manager,
+    );
+    expect(directRes).toContain("exceeds character budget");
+
+    // 使用 replace_timestamps 在同一次调用内删旧写新成功
+    const replaceRes = await handleWrite(
+      {
+        target: "memory",
+        content: "new entry " + "y".repeat(30),
+        replace_timestamps: ["2026-11-01 09:00:00"],
+      },
+      manager,
+    );
+    expect(replaceRes).toContain("[scope: global] Appended to MEMORY.md.");
+    expect(replaceRes).toContain("Budget:");
+
+    const updated = fs.readFileSync(memoryFile, "utf-8");
+    expect(updated).not.toContain("stale entry");
+    expect(updated).toContain("keep entry");
+    expect(updated).toContain("new entry");
+  });
+});
+
+// =============================================================================
 // checkLineLimit：本地 MEMORY.md 行数上限
 // =============================================================================
 

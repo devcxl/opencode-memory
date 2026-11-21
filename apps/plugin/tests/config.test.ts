@@ -163,6 +163,27 @@ test("loadConfig rejects remote options passed at runtime", () => {
   });
 });
 
+test("loadConfig parses partial options.limits with defaults", () => {
+  withTempHome((homeDir) => {
+    writeOpencodeConfig(homeDir, {
+      plugins: [
+        {
+          package: "@devcxl/opencode-memory",
+          options: { limits: { memory: 4000, user: 1500 } },
+        },
+      ],
+    });
+
+    const cfg = loadConfig();
+    expect(cfg.limits).toEqual({
+      memory: 4000,
+      projectMemory: 6000,
+      user: 1500,
+      identity: 2500,
+    });
+  });
+});
+
 test("loadConfig accepts local options", () => {
   withTempHome((homeDir) => {
     writeOpencodeConfig(homeDir, {

@@ -5,15 +5,19 @@ import type {
   SemanticSearchResult,
   MonthGroup,
 } from "../types.js";
-import type { MemoryConfig } from "../config/runtime.js";
+import type { MemoryConfig, MemoryLimits } from "../config/runtime.js";
+import { DEFAULT_MEMORY_LIMITS } from "../config/runtime.js";
 import { ensureDir, readFileSafe } from "../utils/fs.js";
 import { atomicWrite } from "../utils/atomicWrite.js";
 import { KeyedAsyncMutex } from "../utils/asyncMutex.js";
 import { MemoryPaths } from "./MemoryPaths.js";
 import {
+  checkCharBudget,
   checkLineLimit,
+  formatBudgetNote,
   normalizeDailyDate,
   validateProjectId,
+  validateTimestamp,
 } from "../utils/validation.js";
 import { gitCommit } from "../utils/git.js";
 import {
@@ -29,6 +33,7 @@ import { FileSearcher } from "./FileSearcher.js";
 /** 内存系统的核心管理器，统一管理文件读写、向量索引、语义搜索与 git 提交 */
 export class MemoryManager {
   private config: MemoryConfig;
+  private limits: MemoryLimits;
   private paths: MemoryPaths;
   private vectorStore: VectorStore;
   private fileSearcher: FileSearcher;
@@ -37,6 +42,7 @@ export class MemoryManager {
 
   constructor(config: MemoryConfig) {
     this.config = config;
+    this.limits = config.limits ?? DEFAULT_MEMORY_LIMITS;
     this.paths = new MemoryPaths(config.memoryDir);
     this.vectorStore = new VectorStore(config.memoryDir);
     this.fileSearcher = new FileSearcher(
@@ -183,14 +189,28 @@ export class MemoryManager {
     return readFileSafe(filePath);
   }
 
-  /** 写入文件并触发向量索引与 git 提交 */
-  async writeFile(filePath: string, content: string): Promise<void> {
-    await this.fileLocks.withLock(filePath, async () => {
+  /** 写入文件并触发向量索引与 git 提交，返回可选的字符预算提示 */
+  async writeFile(filePath: string, content: string): Promise<string | null> {
+    return this.fileLocks.withLock(filePath, async () => {
+      const existing = readFileSafe(filePath) ?? undefined;
       checkLineLimit(filePath, content);
+      checkCharBudget(
+        filePath,
+        content,
+        this.config.memoryDir,
+        this.limits,
+        existing,
+      );
       await this.persistAndIndex(
         filePath,
         content,
         `Update ${path.basename(filePath)}`,
+      );
+      return formatBudgetNote(
+        filePath,
+        content,
+        this.config.memoryDir,
+        this.limits,
       );
     });
   }
@@ -203,8 +223,8 @@ export class MemoryManager {
     filePath: string,
     oldString: string,
     newString: string,
-  ): Promise<void> {
-    await this.fileLocks.withLock(filePath, async () => {
+  ): Promise<string | null> {
+    return this.fileLocks.withLock(filePath, async () => {
       const content = readFileSafe(filePath);
       if (!content) {
         throw new Error("File not found or empty");
@@ -222,10 +242,24 @@ export class MemoryManager {
       }
 
       const updatedContent = content.replace(oldString, newString);
+      checkLineLimit(filePath, updatedContent);
+      checkCharBudget(
+        filePath,
+        updatedContent,
+        this.config.memoryDir,
+        this.limits,
+        content,
+      );
       await this.persistAndIndex(
         filePath,
         updatedContent,
         `Edit ${path.basename(filePath)}`,
+      );
+      return formatBudgetNote(
+        filePath,
+        updatedContent,
+        this.config.memoryDir,
+        this.limits,
       );
     });
   }
@@ -271,24 +305,76 @@ export class MemoryManager {
         `Delete entries from ${path.basename(filePath)}`,
       );
 
-      return `Deleted ${entries.length - filteredEntries.length} entries from ${displayName}`;
+      const summary = `Deleted ${entries.length - filteredEntries.length} entries from ${displayName}`;
+      const budgetNote = formatBudgetNote(
+        filePath,
+        newContent,
+        this.config.memoryDir,
+        this.limits,
+      );
+      return budgetNote ? `${summary}\n${budgetNote}` : summary;
     });
   }
 
-  /** 以追加方式写入文件，自动添加时间戳标记 */
-  async appendFile(filePath: string, content: string): Promise<void> {
-    await this.fileLocks.withLock(filePath, async () => {
+  /**
+   * 以追加方式写入文件，自动添加时间戳标记。
+   * 可选传入 replaceTimestamps 在同一次锁与原子落盘内先删旧条目再追加新内容，
+   * 仅在终态校验字符预算。
+   */
+  async appendFile(
+    filePath: string,
+    content: string,
+    options?: { replaceTimestamps?: string[] },
+  ): Promise<string | null> {
+    if (options?.replaceTimestamps) {
+      for (const ts of options.replaceTimestamps) {
+        validateTimestamp(ts);
+      }
+    }
+
+    return this.fileLocks.withLock(filePath, async () => {
+      const existing = readFileSafe(filePath) ?? "";
+      let baseContent = existing;
+
+      if (options?.replaceTimestamps && options.replaceTimestamps.length > 0) {
+        const toRemove = new Set(options.replaceTimestamps);
+        const entries = parseContentByTimestamp(existing);
+        const remaining = entries.filter(
+          (entry) => !toRemove.has(entry.timestamp),
+        );
+        if (remaining.length === entries.length) {
+          throw new Error(
+            `No entries found matching replace_timestamps: ${options.replaceTimestamps.join(", ")}`,
+          );
+        }
+        baseContent = remaining
+          .map((e) => `<!-- ${e.timestamp} -->\n${e.content}`)
+          .join("\n\n");
+      }
+
       const timestamp = this.getLocalTimestamp();
       const stamped = `<!-- ${timestamp} -->\n${content}`;
-      const existing = readFileSafe(filePath);
-      const separator = existing?.trim() ? "\n\n" : "";
-      const newContent = (existing ?? "") + separator + stamped;
+      const separator = baseContent.trim() ? "\n\n" : "";
+      const newContent = baseContent + separator + stamped;
 
       checkLineLimit(filePath, newContent);
+      checkCharBudget(
+        filePath,
+        newContent,
+        this.config.memoryDir,
+        this.limits,
+        baseContent || undefined,
+      );
       await this.persistAndIndex(
         filePath,
         newContent,
         `Append to ${path.basename(filePath)}`,
+      );
+      return formatBudgetNote(
+        filePath,
+        newContent,
+        this.config.memoryDir,
+        this.limits,
       );
     });
   }

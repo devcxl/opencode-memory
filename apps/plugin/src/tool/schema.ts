@@ -53,6 +53,12 @@ export const MemoryToolInput = z.object({
     .describe(
       "Timestamp to delete (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS). For delete action only.",
     ),
+  replace_timestamps: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "Optional list of timestamps (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS) to atomically remove before appending new content in a write action.",
+    ),
   period: z
     .string()
     .optional()
@@ -75,7 +81,7 @@ export const MEMORY_TOOL_DESCRIPTION: string = [
   "",
   "**Actions:**",
   "- `read`: Read a memory file (memory, identity, user, daily, or list all)",
-  "- `write`: Write to a memory file. **DEFAULT to daily** for task summaries. Use memory target for knowledge worth retaining across sessions.",
+  "- `write`: Write to a memory file. **DEFAULT to daily** for task summaries. Use memory target for knowledge worth retaining across sessions. Pass `replace_timestamps` to atomically remove stale entries while appending within character budget.",
   "- `edit`: Edit a specific part of memory/identity/user/daily file. AI must read file first to get exact oldString.",
   "- `delete`: Delete entries from a memory file by exact timestamp (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS)",
   "- `search`: Semantic search across memory files. Defaults to project+global (`all`) in project context, global-only otherwise. Use `scope: 'project'` or `scope: 'global'` to restrict range. Use `period` to filter by month.",

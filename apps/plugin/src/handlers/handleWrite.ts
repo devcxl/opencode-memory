@@ -19,10 +19,12 @@ export async function handleWrite(
     date?: string;
     project?: string;
     title?: string;
+    replace_timestamps?: string[];
   },
   memoryManager: MemoryManager,
 ): Promise<string> {
-  const { target, content, mode, date, project, title } = params;
+  const { target, content, mode, date, project, title, replace_timestamps } =
+    params;
 
   if (!content) {
     return "Error: content is required for write action.";
@@ -34,6 +36,10 @@ export async function handleWrite(
 
   validateTarget(target);
   validateContent(content);
+
+  if (mode === "overwrite" && replace_timestamps?.length) {
+    return "Error: replace_timestamps can only be used in append mode.";
+  }
 
   if (project && (target === "memory" || target === "daily")) {
     memoryManager.ensureProjectDirs(project);
@@ -48,18 +54,22 @@ export async function handleWrite(
 
     const effectiveContent = title ? `## ${title}\n${content}` : content;
 
-    if (mode === "overwrite") {
-      await memoryManager.writeFile(filePath, effectiveContent);
-    } else {
-      await memoryManager.appendFile(filePath, effectiveContent);
-    }
+    const budgetNote =
+      mode === "overwrite"
+        ? await memoryManager.writeFile(filePath, effectiveContent)
+        : await memoryManager.appendFile(filePath, effectiveContent, {
+            replaceTimestamps: replace_timestamps,
+          });
 
     const scopeTag = project
       ? `[scope: project/${project}]`
       : `[scope: global]`;
 
     const result = `${scopeTag} ${mode === "overwrite" ? "Wrote to" : "Appended to"} ${displayName}.`;
-    return `${result}\n\nTimestamp: ${memoryManager.getLocalTimestamp()}`;
+    const suffix = budgetNote
+      ? `\n${budgetNote}\n\nTimestamp: ${memoryManager.getLocalTimestamp()}`
+      : `\n\nTimestamp: ${memoryManager.getLocalTimestamp()}`;
+    return `${result}${suffix}`;
   } catch (error) {
     return toErrorMessage(error, `Unknown target: ${target}`);
   }
