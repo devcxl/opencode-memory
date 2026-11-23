@@ -18,10 +18,17 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v7.1.0
+        with:
+          node-version: "24"
+
+      # Node 先就位：pnpm/action-setup@v6.1.1 改用 npm bootstrap，因此需要系统 npm，
+      # 也避免依赖 runner 镜像预装的 Node 版本。
       - name: Setup pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@v6.1.1
         with:
           version: 11.28.4
 
@@ -29,11 +36,6 @@ jobs:
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version: "24"
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile

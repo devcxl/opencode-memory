@@ -26,7 +26,7 @@ jobs:
 
     steps:
       - name: Checkout release tag
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
         with:
           ref: ${{ github.event.release.tag_name }}
           fetch-depth: 0
@@ -34,7 +34,7 @@ jobs:
       # 发布策略（dist-tag、允许的基底分支、registry 校验）始终取自默认分支：
       # 1.x 维护 tag 的树是 V1 布局，里面没有这些脚本，但必须按当前规则执行。
       - name: Checkout release tooling (default branch)
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
         with:
           ref: ${{ github.event.repository.default_branch }}
           path: .release-tooling
@@ -48,8 +48,14 @@ jobs:
             exit 1
           fi
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v7.1.0
+        with:
+          node-version: "24"
+
+      # Node 先就位：pnpm/action-setup@v6.1.1 改用 npm bootstrap，需要系统 npm。
       - name: Setup pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@v6.1.1
         with:
           version: 11.28.4
 
@@ -109,7 +115,7 @@ jobs:
         run: pnpm --filter @devcxl/opencode-memory build
 
       - name: Setup Node.js for npm pack
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@v7.1.0
         with:
           node-version: "24"
 
@@ -118,7 +124,7 @@ jobs:
         run: npm pack --dry-run --ignore-scripts
 
       - name: Setup Node.js for npm publish
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@v7.1.0
         with:
           node-version: "24"
           registry-url: https://registry.npmjs.org
