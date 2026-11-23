@@ -21,8 +21,8 @@ importers:
         specifier: ^2.3.2
         version: 2.3.2(@opentelemetry/semantic-conventions@1.45.0)(redis@6.3.1(@opentelemetry/api@1.9.0))
       zod:
-        specifier: ^4.1.8
-        version: 4.1.8
+        specifier: ^4.6.7
+        version: 4.6.7
     devDependencies:
       '@types/bun':
         specifier: ^1.4.5
@@ -39,7 +39,7 @@ importers:
         version: 4.3.2(@types/node@26.6.6)
       vectra:
         specifier: ^0.15.0
-        version: 0.15.0(@aws-sdk/credential-provider-node@3.972.97)(@huggingface/transformers@4.3.2(@types/node@26.6.6))(@smithy/signature-v4@5.7.5)(ws@8.23.0)(zod@4.1.8)
+        version: 0.15.0(@aws-sdk/credential-provider-node@3.972.97)(@huggingface/transformers@4.3.2(@types/node@26.6.6))(@smithy/signature-v4@5.7.5)(ws@8.23.0)(zod@4.6.7)
 
 packages:
 
@@ -1852,8 +1852,8 @@ packages:
     resolution: {integrity: sha512-9OpKOLeaoNFecEp7P6iYbzze/5CqWoH7N3SMs/6y1XF4nMvFMspEGZzJ6uFi9MmQwXhyzqYoSEKO3tvA3Z/o2w==}
     engines: {node: ^20.19.0 || ^22.12.0 || >=23}
 
-  zod@4.1.8:
-    resolution: {integrity: sha512-5R1P+WwQqmmMIEACyzSvo4JXHY5WiAFHRMg+zBZKgKS+Q1viRa0C1hmUKtHltoIFKtIdki3pRxkmpP74jnNYHQ==}
+  zod@4.6.7:
+    resolution: {integrity: sha512-g8W2D2kU6a8untc053fX1uVBKzM7yqAxW/3zwk83+6RyF2+SKOuV+c0wBDhUwzV1PaGapmZH+rmcUzPf+3CGwg==}
 
 snapshots:
 
@@ -3469,12 +3469,12 @@ snapshots:
       powershell-utils: 0.2.1
       wsl-utils: 1.0.1
 
-  openai@6.49.0(@aws-sdk/credential-provider-node@3.972.97)(@smithy/signature-v4@5.7.5)(ws@8.23.0)(zod@4.1.8):
+  openai@6.49.0(@aws-sdk/credential-provider-node@3.972.97)(@smithy/signature-v4@5.7.5)(ws@8.23.0)(zod@4.6.7):
     optionalDependencies:
       '@aws-sdk/credential-provider-node': 3.972.97
       '@smithy/signature-v4': 5.7.5
       ws: 8.23.0
-      zod: 4.1.8
+      zod: 4.6.7
     optional: true
 
   p-map@7.1.1: {}
@@ -3798,7 +3798,7 @@ snapshots:
 
   validate-npm-package-name@7.0.2: {}
 
-  vectra@0.15.0(@aws-sdk/credential-provider-node@3.972.97)(@huggingface/transformers@4.3.2(@types/node@26.6.6))(@smithy/signature-v4@5.7.5)(ws@8.23.0)(zod@4.1.8):
+  vectra@0.15.0(@aws-sdk/credential-provider-node@3.972.97)(@huggingface/transformers@4.3.2(@types/node@26.6.6))(@smithy/signature-v4@5.7.5)(ws@8.23.0)(zod@4.6.7):
     dependencies:
       '@grpc/grpc-js': 1.14.7
       '@grpc/proto-loader': 0.8.1
@@ -3807,7 +3807,7 @@ snapshots:
       dotenv: 17.4.2
       gpt-tokenizer: 3.4.0
       json-colorizer: 3.0.1
-      openai: 6.49.0(@aws-sdk/credential-provider-node@3.972.97)(@smithy/signature-v4@5.7.5)(ws@8.23.0)(zod@4.1.8)
+      openai: 6.49.0(@aws-sdk/credential-provider-node@3.972.97)(@smithy/signature-v4@5.7.5)(ws@8.23.0)(zod@4.6.7)
       turndown: 7.2.4
       uuid: 13.0.2
       wink-bm25-text-search: 3.1.2
@@ -3955,4 +3955,4 @@ snapshots:
       yargs-parser: 22.0.0
     optional: true
 
-  zod@4.1.8: {}
+  zod@4.6.7: {}
