@@ -22,6 +22,8 @@ let semanticResults: any[] = [];
 let projectSemanticResults: any[] = [];
 let currentModelId = "mock-embedding-model";
 let currentDtype = "fp32";
+/** 控制 mock 的 embedding 引擎就绪状态（默认就绪，便于既有用例按原语义执行索引） */
+let mockEmbedderReady = true;
 
 mock.module("../src/search/embedding.js", () => ({
   embedText: async (text: string) => {
@@ -33,6 +35,8 @@ mock.module("../src/search/embedding.js", () => ({
   getCurrentModelId: () => currentModelId,
   getEmbeddingDimensions: () => 384,
   initEmbedder: async () => {},
+  // 测试夹具中的 embedder 默认视为就绪，使写入路径按预期执行索引
+  isEmbedderReady: () => mockEmbedderReady,
 }));
 
 const { VectorStore } = await import("../src/search/vector-store.js");
@@ -1868,6 +1872,42 @@ test("background indexing failure is logged and does not break flush or written 
     } finally {
       console.error = origError;
       vectorStoreSpies[0].mockImplementation(defaultUpsertImpl);
+    }
+  });
+});
+
+test("writes skip indexing when the embedding engine is not ready, and search backfills it", async () => {
+  await withTempMemory(async (memoryDir) => {
+    const manager = new MemoryManager({ memoryDir });
+    await manager.ensureDirectories();
+
+    // 模拟冷启动：embedding 引擎尚未就绪（真实场景下避免触发 33MB 模型下载）
+    mockEmbedderReady = false;
+
+    try {
+      await handleWrite(
+        { target: "memory", content: "cold start note without model download" },
+        manager,
+      );
+      await manager.flush();
+
+      // Markdown 作为 SSOT 已落盘
+      expect(
+        fs.readFileSync(path.join(memoryDir, "MEMORY.md"), "utf-8"),
+      ).toContain("cold start note without model download");
+      // 引擎未就绪时不产生任何向量化调用，也不写入向量索引
+      expect(embeddedTexts).toHaveLength(0);
+      expect(upsertCalls).toHaveLength(0);
+
+      // 引擎就绪后，检索会先补建被跳过的索引，保证写入内容仍可被搜到
+      mockEmbedderReady = true;
+      const results = await manager.semanticSearch("cold start note", 5);
+      expect(upsertCalls.length).toBeGreaterThanOrEqual(1);
+      expect(results.some((r) => r.text.includes("cold start note"))).toBe(
+        true,
+      );
+    } finally {
+      mockEmbedderReady = true;
     }
   });
 });

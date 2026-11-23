@@ -23,6 +23,7 @@ import {
 } from "../utils/validation.js";
 import { gitCommit } from "../utils/git.js";
 import { indexFileIncrementally } from "../search/incrementalIndexer.js";
+import { isEmbedderReady } from "../search/embedding.js";
 import { VectorStore } from "../search/vector-store.js";
 import {
   formatTimestampComment,
@@ -41,6 +42,11 @@ export class MemoryManager {
   private freshIndexPromise: Promise<void> | null = null;
   private readonly fileLocks = new KeyedAsyncMutex();
   private readonly syncQueue: BackgroundSyncQueue;
+  /**
+   * 写入时 embedding 引擎尚未就绪、因而跳过向量化的文件。
+   * 由后续检索路径（此时模型必然已加载）补建，避免写入为用户带来首次模型下载等待。
+   */
+  private readonly pendingIndexFiles = new Set<string>();
 
   constructor(config: MemoryConfig) {
     this.config = config;
@@ -390,7 +396,13 @@ export class MemoryManager {
     const latestContent = readFileSafe(filePath);
     if (latestContent !== null) {
       try {
-        await this.embedAndIndex(filePath, latestContent);
+        if (isEmbedderReady()) {
+          await this.embedAndIndex(filePath, latestContent);
+          this.pendingIndexFiles.delete(filePath);
+        } else {
+          // 引擎未就绪：不为派生索引触发首次模型下载，留待检索时补建
+          this.pendingIndexFiles.add(filePath);
+        }
       } catch (err) {
         console.error(
           `[opencode-memory] Background vector indexing failed for ${filePath}: ${err instanceof Error ? err.message : String(err)}`,
@@ -405,6 +417,32 @@ export class MemoryManager {
       console.error(
         `[opencode-memory] Background git commit failed for ${filePath}: ${err instanceof Error ? err.message : String(err)}`,
       );
+    }
+  }
+
+  /**
+   * 补建此前因引擎未就绪而跳过的索引。
+   * 仅在检索路径调用——此时 embedding 引擎必然已初始化，不会引入额外等待。
+   */
+  private async buildDeferredIndices(): Promise<void> {
+    if (this.pendingIndexFiles.size === 0 || !isEmbedderReady()) return;
+
+    for (const filePath of [...this.pendingIndexFiles]) {
+      const content = readFileSafe(filePath);
+      if (content === null) {
+        this.pendingIndexFiles.delete(filePath);
+        continue;
+      }
+      try {
+        await this.fileLocks.withLock(filePath, () =>
+          this.embedAndIndex(filePath, content),
+        );
+        this.pendingIndexFiles.delete(filePath);
+      } catch (err) {
+        console.error(
+          `[opencode-memory] Deferred vector indexing failed for ${filePath}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }
   }
 
@@ -454,7 +492,7 @@ export class MemoryManager {
     return files;
   }
 
-  /** 委托给 FileSearcher：语义搜索（检索前先等待待建后台索引队列收敛） */
+  /** 委托给 FileSearcher：语义搜索（检索前先收敛后台队列并补建延迟索引） */
   async semanticSearch(
     query: string,
     maxResults: number = 20,
@@ -463,6 +501,7 @@ export class MemoryManager {
     scope: "all" | "global" | "project" = "all",
   ): Promise<SemanticSearchResult[]> {
     await this.flush();
+    await this.buildDeferredIndices();
     return this.fileSearcher.semanticSearch(
       query,
       maxResults,

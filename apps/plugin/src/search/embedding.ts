@@ -143,6 +143,17 @@ export async function getEmbedder(): Promise<any> {
 }
 
 /**
+ * 当前是否已有可用的 embedder 实例（不触发初始化）。
+ *
+ * 派生向量索引属于可随时重建的数据，写入路径不应为了索引而付出首次模型
+ * 下载/加载的代价：用户可能只是记一条备忘，却被迫等待几秒到数十秒。
+ * 因此索引侧先检查此标志，引擎未就绪时跳过索引，留待检索或预热时补齐。
+ */
+export function isEmbedderReady(): boolean {
+  return embedder !== null;
+}
+
+/**
  * 对单段文本执行向量化，返回归一化后的嵌入向量。
  * 使用 mean pooling + L2 normalize 确保余弦相似度一致性。
  *
