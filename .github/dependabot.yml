@@ -1,17 +1,14 @@
 version: 2
+
+# 仅保留根目录一条 npm 条目：本仓库是 pnpm workspace，Dependabot 在根目录
+# 扫描即可覆盖 apps/plugin 在内的全部 workspace 项目，并同步更新根 pnpm-lock.yaml。
+#
+# 不要再为 /apps/plugin 单独添加 npm 条目。那会让同一个依赖被开两个 PR，
+# 且子目录条目只改 package.json、不更新根 lockfile，在 CI 的
+# --frozen-lockfile 下必然 ERR_PNPM_OUTDATED_LOCKFILE（历史 PR #43/#46/#49/#50）。
 updates:
   - package-ecosystem: "npm"
     directory: "/"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 5
-    labels:
-      - "dependencies"
-    commit-message:
-      prefix: "chore(deps)"
-
-  - package-ecosystem: "npm"
-    directory: "/apps/plugin"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
