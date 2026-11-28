@@ -28,18 +28,18 @@ importers:
         specifier: ^1.4.5
         version: 1.4.5
       '@types/node':
-        specifier: ^26.6.6
-        version: 26.6.6
+        specifier: ^26.6.9
+        version: 26.6.9
       typescript:
         specifier: ^7.0.2
         version: 7.0.2
     optionalDependencies:
       '@huggingface/transformers':
         specifier: 4.3.2
-        version: 4.3.2(@types/node@26.6.6)
+        version: 4.3.2(@types/node@26.6.9)
       vectra:
         specifier: ^0.15.0
-        version: 0.15.0(@aws-sdk/credential-provider-node@3.972.97)(@huggingface/transformers@4.3.2(@types/node@26.6.6))(@smithy/signature-v4@5.7.5)(ws@8.23.0)(zod@4.6.7)
+        version: 0.15.0(@aws-sdk/credential-provider-node@3.972.97)(@huggingface/transformers@4.3.2(@types/node@26.6.9))(@smithy/signature-v4@5.7.5)(ws@8.23.0)(zod@4.6.7)
 
 packages:
 
@@ -732,8 +732,8 @@ packages:
   '@types/bun@1.4.5':
     resolution: {integrity: sha512-DpgwNI9z0L1S0gtb45QLCWgwCUcMLnsHYMJHQvpNj7erGiCGBvpggltAIeARrtobNMKMuy0UP7i56tKKgwFs/Q==}
 
-  '@types/node@26.6.6':
-    resolution: {integrity: sha512-MzQj+8Kx3XI40OmUAE6Qoh58ZMNstNNMwn2nfd3qWsfe7nDNSqJNzes4njhz6AHwrSHOffSLwXU6yb474Q4aog==}
+  '@types/node@26.6.9':
+    resolution: {integrity: sha512-MkLVXFazHKL5/3lkiYqaSti6Ohv0Vi6z2bPwUQAs/aXUuuY8go4hR3mz8Kvu0lBC2HH0Zn+ON2G9hTglqDD48A==}
 
   '@types/ws@8.18.2':
     resolution: {integrity: sha512-67MQl+fpWKVTT1NYdnmo3U4sc/xPo/zQBncVnI74qmQa0z/b+1g6iYqNmGCPbxO+zz2aklb08a0oHfegiVd0/w==}
@@ -2131,13 +2131,13 @@ snapshots:
   '@huggingface/tokenizers@0.2.0':
     optional: true
 
-  '@huggingface/transformers@4.3.2(@types/node@26.6.6)':
+  '@huggingface/transformers@4.3.2(@types/node@26.6.9)':
     dependencies:
       '@huggingface/jinja': 0.5.13
       '@huggingface/tokenizers': 0.2.0
       onnxruntime-node: 1.30.0
       onnxruntime-web: 1.31.0-dev.20260914-8d85527a0
-      sharp: 0.35.5(@types/node@26.6.6)
+      sharp: 0.35.5(@types/node@26.6.9)
     transitivePeerDependencies:
       - '@types/node'
     optional: true
@@ -2718,13 +2718,13 @@ snapshots:
     dependencies:
       bun-types: 1.4.5
 
-  '@types/node@26.6.6':
+  '@types/node@26.6.9':
     dependencies:
       undici-types: 8.9.0
 
   '@types/ws@8.18.2':
     dependencies:
-      '@types/node': 26.6.6
+      '@types/node': 26.6.9
 
   '@typescript/typescript-aix-ppc64@7.0.2':
     optional: true
@@ -2844,7 +2844,7 @@ snapshots:
 
   bun-types@1.4.5:
     dependencies:
-      '@types/node': 26.6.6
+      '@types/node': 26.6.9
       undici-types: 8.9.0
 
   bundle-name@4.1.1:
@@ -3569,7 +3569,7 @@ snapshots:
       '@protobufjs/path': 1.1.2
       '@protobufjs/pool': 1.1.0
       '@protobufjs/utf8': 1.1.2
-      '@types/node': 26.6.6
+      '@types/node': 26.6.9
       long: 5.3.2
     optional: true
 
@@ -3612,7 +3612,7 @@ snapshots:
       type-fest: 0.20.2
     optional: true
 
-  sharp@0.35.5(@types/node@26.6.6):
+  sharp@0.35.5(@types/node@26.6.9):
     dependencies:
       '@img/colour': 1.1.0
       detect-libc: 2.1.2
@@ -3643,7 +3643,7 @@ snapshots:
       '@img/sharp-win32-arm64': 0.35.5
       '@img/sharp-win32-ia32': 0.35.5
       '@img/sharp-win32-x64': 0.35.5
-      '@types/node': 26.6.6
+      '@types/node': 26.6.9
     optional: true
 
   shebang-command@2.0.0:
@@ -3798,7 +3798,7 @@ snapshots:
 
   validate-npm-package-name@7.0.2: {}
 
-  vectra@0.15.0(@aws-sdk/credential-provider-node@3.972.97)(@huggingface/transformers@4.3.2(@types/node@26.6.6))(@smithy/signature-v4@5.7.5)(ws@8.23.0)(zod@4.6.7):
+  vectra@0.15.0(@aws-sdk/credential-provider-node@3.972.97)(@huggingface/transformers@4.3.2(@types/node@26.6.9))(@smithy/signature-v4@5.7.5)(ws@8.23.0)(zod@4.6.7):
     dependencies:
       '@grpc/grpc-js': 1.14.7
       '@grpc/proto-loader': 0.8.1
@@ -3814,7 +3814,7 @@ snapshots:
       wink-nlp: 2.4.0
       yargs: 18.2.0
     optionalDependencies:
-      '@huggingface/transformers': 4.3.2(@types/node@26.6.6)
+      '@huggingface/transformers': 4.3.2(@types/node@26.6.9)
       protobufjs: 8.8.1
     transitivePeerDependencies:
       - '@aws-sdk/credential-provider-node'
